@@ -1,0 +1,13 @@
+{
+  "name": "ast",
+  "version": "1.0.0",
+  "description": "Eclipse Agent Studio CLI integration for Claude Code — OAuth login, registration, and platform authentication.",
+  "author": {
+    "name": "Eclipse Space",
+    "url": "https://eclipse.space"
+  },
+  "homepage": "https://github.com/Eclipse-Space/ast-cli",
+  "repository": "https://github.com/Eclipse-Space/ast-cli",
+  "license": "MIT",
+  "keywords": ["eclipse", "agent-studio", "oauth", "cli", "authentication"]
+}

@@ -1,0 +1,4 @@
+display_name: "Eclipse Agent Studio"
+short_description: "OAuth login and registration for the Eclipse Agent Studio CLI"
+default_prompt: "Help me authenticate with the Eclipse Agent Studio CLI"
+allow_implicit_invocation: true

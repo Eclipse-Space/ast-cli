@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ast",
+  "description": "Eclipse Agent Studio CLI plugin for Claude Code — OAuth authentication and platform integration.",
+  "owner": {
+    "name": "Eclipse Space",
+    "email": "support@eclipse.space"
+  },
+  "plugins": [
+    {
+      "name": "ast",
+      "description": "Eclipse Agent Studio CLI integration for Claude Code — OAuth login, registration, and platform authentication.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Eclipse Space",
+        "email": "support@eclipse.space"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/Eclipse-Space/ast-cli"
+    }
+  ]
+}
