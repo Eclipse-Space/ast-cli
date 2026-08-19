@@ -410,7 +410,7 @@ Once the user is on a server, introduce concepts **only when the user's current 
 | Use a tool or run a job | **Services** | Browse available services, attach one, run a job with it |
 | Change how the AI behaves | **Rules** | Show current rules, edit workspace rules |
 | Connect external tools (Slack, GitHub, etc.) | **MCP Configs** | Add an MCP server config to the workspace |
-| Store API keys securely | **Secrets** | Add a workspace secret, explain it becomes an env var |
+| Store API keys securely | **Secrets** | `secrets create --value-stdin --workspace-id <ID>`, explain it becomes an env var |
 | Build a custom tool | **Service development** | Walk through scaffold → build → test → deploy on the server |
 | Share with teammates | **Members** | Add members to the org or share workspace access |
 | Reuse prompts or workflows | **Skills** | Explain skills, show how to create or attach one |
@@ -600,10 +600,21 @@ $CLI volumes create \
   --organization-id <ORG_ID> \
   --name "My Data"
 
-# Upload files
+# Upload files (multipart + resumable above 50 MiB; re-run to resume after an interruption)
 $CLI volume-data upload \
   --volume-id <VOL_ID> \
-  --file /path/to/file.json
+  --file /path/to/file.json \
+  --key results/file.json
+
+# Download files (nested keys work; directory structure is preserved under
+# --output-dir since 0.1.4 — pass --flat for the old basename-only layout)
+$CLI volume-data download \
+  --volume-id <VOL_ID> \
+  --keys sim-runner/jobs/<SIM_ID>/results/out.bin \
+  --output-dir ./results
+
+# Presign for external tools (bare URL on stdout with --format table; expires in 24 h)
+aria2c -x16 "$($CLI volume-data presign --volume-id <VOL_ID> --key results/out.bin --format table)"
 
 # Attach to workspace (makes it available on servers at /workspace/volumes/My Data/)
 $CLI volumes add-to-workspace \
@@ -623,7 +634,6 @@ $CLI services add-to-workspace \
 $CLI service-jobs create \
   --workspace-id <WS_ID> \
   --service-id <SERVICE_ID> \
-  --name "My Job" \
   --payload '{"tool": "tool_name", "inputs": {"param1": "value1"}}'
 
 # Check job status
@@ -631,6 +641,28 @@ $CLI service-jobs get --workspace-id <WS_ID> --format table
 ```
 
 **Payload format:** `{"tool": "<tool_name>", "inputs": {<parameters>}}` — always include `"inputs"` even if empty.
+
+## Run a Persistent-Service Job (e.g. a solver)
+
+```bash
+# Discover the service and its tools
+$CLI persistent-services get --workspace-id <WS_ID> --format table
+$CLI persistent-services get --persistent-service-id <PS_ID> --format table
+
+# Submit — volume paths in inputs use the volume UUID; queues even if stopped
+$CLI persistent-services jobs create \
+  --persistent-service-id <PS_ID> \
+  --workspace-id <WS_ID> \
+  --volumes <VOLUME_UUID> \
+  --payload '{"tool": "hfss_solve", "inputs": {"project_file": "/workspace/volumes/<VOLUME_UUID>/in.aedt"}}'
+
+# Poll until completedAt is set (single-shot per call; exit 0 even on failure;
+# JSON output is the job object itself — check .completedAt)
+$CLI persistent-services jobs status --ps-job-id <PS_JOB_ID> --workspace-id <WS_ID>
+
+# Terminal jobs expose presigned log/result URLs (~24 h; re-query to refresh)
+$CLI persistent-services jobs status --ps-job-id <PS_JOB_ID> --workspace-id <WS_ID> --format table
+```
 
 ## Service Development Lifecycle (on a server)
 
@@ -705,10 +737,31 @@ Role values: `admin`, `member`.
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `volume-data get` | `--volume-id` | `--dir`, `--recursive` (`true`\|`false`), `--limit` (50), `--cursor` |
-| `volume-data upload` | `--volume-id`, `--file` | `--key` |
-| `volume-data download` | `--volume-id` | `--keys`, `--output-dir` |
+| `volume-data get` | `--volume-id` | `--keys` (exact lookup, repeatable), `--dir`, `--recursive` (`true`\|`false`), `--limit` (50), `--cursor` |
+| `volume-data upload` | `--volume-id`, `--file` | `--key`, `--no-resume` |
+| `volume-data download` | `--volume-id`, `--keys` (repeatable) | `--output-dir`, `--flat` |
 | `volume-data delete` | `--volume-id` | `--keys` |
+| `volume-data presign` | `--volume-id`, `--key` | `--method` (`get`\|`put`, default `get`), `--size` (bytes, required for `put`) |
+| `volume-data finalize` | `--key` | `--upload-id`, `--part <n>:<eTag>` (repeatable) |
+
+Notes:
+- Uploads stream in 50 MiB parts; files above 50 MiB use multipart with a resume
+  checkpoint under `~/.ast/uploads/` — an interrupted upload picks up where it
+  left off on re-run (`--no-resume` forces a fresh start).
+- Downloads look up keys exactly (nested keys like `sim-runner/jobs/<id>/results/x`
+  work), stream to disk, and preserve the key's directory structure under
+  `--output-dir` (since 0.1.4). `--flat` restores the pre-0.1.4 layout: every
+  file lands directly in `--output-dir` under its basename.
+- `presign --format table` prints the bare URL(s) on stdout for shell composition,
+  e.g. `aria2c -x16 "$($CLI volume-data presign --volume-id <V> --key <K> --format table)"`.
+  Download URLs expire after 24 h. For multipart PUT sizes, table format prints
+  one part URL per line on stdout with `uploadId`/`partSize` and the finalize
+  command on stderr. `--format json` (default) returns the full contract; for
+  multipart PUT it includes `urls[]`, `partSize`, `uploadId`, and the exact
+  `finalize` command to run afterwards.
+- `finalize` registers an object uploaded via presigned PUT — until it runs, the
+  object does not appear in `volume-data get`. Uploads via `volume-data upload`
+  finalize automatically.
 
 ## services — Service management
 
@@ -733,8 +786,42 @@ Role values: `admin`, `member`.
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `service-jobs get` | — | `--workspace-id`, `--service-id`, `--limit` (50), `--cursor`, `--fields`, `--filters` |
-| `service-jobs create` | `--workspace-id`, `--service-id`, `--name` | `--description`, `--payload` (JSON string), `--payload-file` (path) |
+| `service-jobs create` | `--workspace-id`, `--service-id` | `--payload` (JSON string), `--payload-file` (path) |
 | `service-jobs delete` | `--workspace-id`, `--job-id` | — |
+
+## persistent-services — Persistent service management (lifecycle + jobs)
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `persistent-services get` | — | `--persistent-service-id` (detail view incl. tools), `--organization-id`, `--workspace-id`, `--limit` (50), `--cursor` |
+| `persistent-services start` | `--persistent-service-id` | — |
+| `persistent-services stop` | `--persistent-service-id` | — |
+| `persistent-services restart` | `--persistent-service-id` | — |
+| `persistent-services jobs create` | `--persistent-service-id`, `--payload` or `--payload-file` | `--workspace-id`, `--volumes` (UUID, repeatable), `--editor-id` |
+| `persistent-services jobs get` | — | `--workspace-id`, `--persistent-service-id`, `--status`, `--limit` (50) |
+| `persistent-services jobs status` | `--ps-job-id` | `--workspace-id` |
+| `persistent-services jobs cancel` | `--ps-job-id` | — |
+| `persistent-services jobs delete` | `--ps-job-id` | — |
+
+Notes:
+- Payload contract is the same `{"tool": "<name>", "inputs": {...}}` shape as
+  standard service jobs. Paths inside `inputs` that reference volumes MUST use
+  the full volume UUID: `/workspace/volumes/<volume_uuid>/...`, and each UUID
+  must be passed via `--volumes`.
+- Submitting to a **stopped** service is valid: the job queues and the
+  platform auto-starts the service. Don't gate submissions on service state.
+  A full queue is rejected server-side ("Job queue is full (N/M)").
+- Job statuses are an **open vocabulary** (`queued`, `starting`, `running`,
+  `success`, `error`, `cancelled`, `timeout`, ...). A job is finished iff
+  `completedAt` is set; it failed iff `errorMessage`/`errorCode` is present.
+  Treat unknown statuses as still in progress.
+- `jobs status` is single-shot and exits 0 for a failed job (the query
+  succeeded; the JSON carries the outcome) — poll it in a loop. Its JSON
+  output is the job object itself (not a list): check `.completedAt` /
+  `.errorMessage` directly. `location` (result zip) and `logfile` are
+  presigned URLs (~24 h) regenerated on every query; re-run `jobs status`
+  for fresh links. A completed container does not by itself mean the solve
+  succeeded — check the log.
 
 ## servers — Server management
 
@@ -806,9 +893,47 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 | `skills overrides` | `--workspace-id` | — |
 | `skills toggle-override` | `--workspace-id`, `--skill-id` | — |
 
+## secrets — Secret management
+
+Secrets are environment variables injected into servers — where API keys and tokens belong instead of a repo or a rules file.
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `secrets get` | — | `--organization-id`, `--workspace-id` |
+| `secrets create` | `--name`, a value source, and `--workspace-id` or `--all-workspaces` | `--organization-id` |
+| `secrets create` (bulk) | `--env-file`, and `--workspace-id` or `--all-workspaces` | `--organization-id` |
+| `secrets edit` | `--secret-id` | value source, `--workspace-id`, `--all-workspaces` |
+| `secrets delete` | `--secret-id` | `--yes` |
+
+**Values are write-only.** The platform never returns a secret's value — `secrets get` lists names, scope, and timestamps only. There is no command to read a value back. If a user loses a value, the only remedy is replacing it with `secrets edit`.
+
+**Never put a secret value in `--value` when acting on a user's behalf.** It lands in shell history and the process list. Use one of:
+
+```bash
+# Preferred — value on stdin, never touches disk or history
+printf '%s' "$VALUE" | ast secrets create --name OPENAI_API_KEY \
+  --value-stdin --workspace-id <WORKSPACE_ID>
+
+# For multi-line values such as a PEM private key
+ast secrets create --name GITHUB_APP_PRIVATE_KEY \
+  --value-file ./key.pem --workspace-id <WORKSPACE_ID>
+```
+
+A trailing newline is stripped from `--value-stdin` and `--value-file`.
+
+**Never echo a secret value back to the user, into a file, or into a log.** If you read a value from a file to pass it on, pipe it — do not print it as an intermediate step.
+
+**Exposure is required.** Every secret needs `--workspace-id` (repeatable) or `--all-workspaces`. A secret created with neither cannot afterwards be listed, edited, or deleted, so the CLI rejects it. `--workspace-id` must be a UUID — a typo would otherwise strand the secret the same way.
+
+**Names are scoped per workspace, not per organization.** The same name can exist in two workspaces as two independent secrets; rotating one does not update the other. Point this out before copying a credential into a second workspace.
+
+**Bulk import** with `--env-file` creates one secret per `KEY=VALUE` line. Comments, blank lines, `export ` prefixes, and quoted values are handled. Multi-line values (a PEM spanning lines) are **not** supported and are rejected — create those individually with `--value-file`.
+
+**Deleting** prompts for confirmation in an interactive terminal. When running non-interactively the command proceeds without prompting, so confirm with the user yourself before calling it.
+
 ## rules — Platform rules
 
-Rules are text instructions that shape how agents work. They're compiled into the agent's context at startup.
+Rules are **markdown documents** that shape how agents work. They're compiled into the agent's context at startup.
 
 **Hierarchy (broadest → most specific, more specific overrides broader):**
 Organization → User → Service → Workspace
@@ -817,13 +942,31 @@ Organization → User → Service → Workspace
 |---------|-----------------|
 | `rules get-platform` | — |
 | `rules get-organization` | `--organization-id` |
-| `rules edit-organization` | `--organization-id`, `--rules` |
+| `rules edit-organization` | `--organization-id`, `--rules` \| `--rules-file` |
 | `rules get-workspace` | `--workspace-id` |
-| `rules edit-workspace` | `--workspace-id`, `--rules` |
+| `rules edit-workspace` | `--workspace-id`, `--rules` \| `--rules-file` |
 | `rules get-service` | `--service-id` |
-| `rules edit-service` | `--service-id`, `--rules` |
+| `rules edit-service` | `--service-id`, `--rules` \| `--rules-file` |
 | `rules get-user` | — |
-| `rules edit-user` | `--rules` |
+| `rules edit-user` | `--rules` \| `--rules-file` |
+
+Every `edit-*` takes the markdown from **either** `--rules` or `--rules-file <PATH>` — exactly one, never both. Prefer `--rules-file` for anything longer than a line or two; it avoids shell-quoting a whole document.
+
+```bash
+ast rules edit-workspace --workspace-id <WS_ID> --rules-file rules.md
+```
+
+The content is sent **literally** — it is not parsed as JSON. Pass raw markdown. **Never** pre-encode it with `jq -Rs .` or `JSON.stringify`; that stores the surrounding quotes and literal `\n` escapes into the rules every agent then receives.
+
+**`edit-*` replaces the entire document — it does not append.** To extend existing rules, read them first, edit, then write the whole thing back:
+
+```bash
+ast rules get-workspace --workspace-id <WS_ID> --format table > rules.md
+# append or modify rules.md
+ast rules edit-workspace --workspace-id <WS_ID> --rules-file rules.md
+```
+
+Use `--format table` on `get-*` to print the markdown itself; the default JSON format wraps it in an envelope. Empty rules are rejected, so a write cannot silently blank the document.
 
 ## schema — Schema introspection
 
