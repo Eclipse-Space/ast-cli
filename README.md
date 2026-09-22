@@ -233,10 +233,16 @@ ast secrets edit     Change a secret's value or workspace exposure
 ast secrets delete   Delete a secret
 ast rules get-*      Show platform/organization/workspace/service/user rules
 ast rules edit-*     Replace organization/workspace/service/user rules
+ast processes get    Process discovery index (which service, volume and workspace run each process)
+ast preauth status   Show per-name pre-auth enrollment status (on a server)
+ast preauth seed     Store this server's gh + Claude logins on the platform
+ast refresh          Re-sync skills, rules, MCP config and secrets (on a server)
+ast refresh --check  Report drift without writing (exit 3 when drift is found)
 ```
 
 Further command groups: `organizations`, `members`, `volumes`, `volume-data`,
-`services`, `skills`, `servers`, `mcp-servers`, `api-keys`, `rules`, `schema`.
+`services`, `service-jobs`, `persistent-services`, `processes`, `skills`,
+`servers`, `mcp-servers`, `api-keys`, `preauth`, `refresh`, `rules`, `schema`.
 Run `ast <group> --help` for details.
 
 ## Volume Data
@@ -294,6 +300,8 @@ auto-starts a stopped service that has queued jobs.
 ```bash
 # List services / inspect one (detail shows the tools it exposes)
 ast persistent-services get --workspace-id <WS_ID> --format table
+# narrow the selection — the full record carries serviceSchema + serviceRules (tens of KB each)
+ast persistent-services get --organization-id <ORG_ID> --fields name,persistentServiceId,status
 
 # Submit a job — the payload is {"tool": ..., "inputs": {...}}; volume paths
 # use the volume UUID and each volume is declared with --volumes
@@ -311,6 +319,123 @@ ast persistent-services jobs status --ps-job-id <PS_JOB_ID>
 ast persistent-services start|stop|restart --persistent-service-id <PS_ID>
 ast persistent-services jobs cancel --ps-job-id <PS_JOB_ID>
 ```
+
+## Processes
+
+`ast processes get` builds the **process discovery index**: for every
+persistent service in the organization, which process it runs, on which store
+volume and jobs workspace, with which tools. It is what the job-runner skill
+reads on editors and in Claude Code, and what the gateway serves Claude
+Desktop through `run_ast(["processes", "get", "--organization-id", …])` — so
+environment-specific ids are never stored in a skill package or a gateway
+table; every surface reads the current environment's ids at run time.
+
+```bash
+# The index. Organization-scoped: --organization-id, else AST_ORGANIZATION_ID,
+# else the configured organization (`ast orgs use`). --workspace-id only
+# narrows — it is deliberately not read from AST_WORKSPACE_ID.
+ast processes get --organization-id <ORG_ID>
+
+# Filters (exact; --extension is case-insensitive, leading dot optional)
+ast processes get --extension .aedt
+ast processes get --domain fab --process fab-package
+ast processes get --name fab-package-automation --format table
+```
+
+The bindings are authored in a `process.yaml` next to `service.yaml`, pointed
+at by a top-level `process:` key — the sibling of `rules:`:
+
+```yaml
+# service.yaml
+rules: README.md        # the agent-facing process document
+process: process.yaml   # the discovery block this verb reads
+```
+
+```yaml
+# process.yaml
+eclipse_process: 1                 # convention version (required, must be 1)
+process: fab-package               # process family (required)
+domain: fab                        # eclipse.job/1 descriptor the job rides (required)
+label: PCB fab package (validate a _FAB.zip / assemble from parts)
+volume_name: PCB/PCBA Automation Workspace Volume   # store volume, exact name (required)
+workspace_name: PCB/PCBA Automation                 # jobs workspace, exact name (required)
+runtime_class: minutes             # seconds | minutes | hours — for every tool, or a per-tool map
+preflight: self_validating         # dry_run | self_validating | none — likewise (`no_solve` = dry_run)
+extension_hints:                   # input extension -> tools on THIS service
+  .zip: [validate]
+  .xlsx: [assemble]
+  .tgz: [assemble]
+results:                           # for every tool, or a per-tool map of these keys
+  report_glob: "results/*_report.json"
+default_inputs:                    # keyed by tool, never flat
+  validate: {formats: "md,json"}
+```
+
+The full field reference is [`docs/process-yaml.md`](docs/process-yaml.md); the
+machine-readable copy is [`schemas/process.schema.json`](schemas/process.schema.json)
+(kept in step with the parser by a unit test).
+
+`ast services deploy` validates the file before any network or Docker work —
+it must be a well-formed document, and every tool it names (in
+`extension_hints`, the per-tool maps, `results`, and `default_inputs`) must exist under
+`service.tools`, with every default naming a declared input — and then folds
+it into the service schema as its `process` key. The platform snapshots that
+schema onto the persistent-service record as `serviceSchema`, next to the
+`rules:` document, and a persistent-service update (`upgradeToLatestVersion`)
+refreshes both. The file carries no ids: the persistent-service and service
+ids come from the record, and the names resolve in whichever environment reads
+them. Per record:
+
+- `workspace_name` resolves to `workspace_id` by **exact** name within the
+  organization. `volume_name` resolves against the organization's volumes
+  **plus the volumes attached to that workspace** — a workspace's own volume
+  (`<workspace> Workspace Volume`) is not in the organization-scoped listing.
+  Zero or several matches emit `volume_resolution` / `workspace_resolution`
+  (`not_found` | `ambiguous`, with the candidates) and a `null` id — the verb
+  never guesses.
+- `runtime_class` and `preflight` are always emitted as **per-tool maps**. A
+  scalar in the file applies to every tool and is expanded over the schema's
+  tools; a map names tools explicitly (a multi-stage service: prep in
+  minutes, the solve in hours). `default_inputs` is keyed by tool
+  (`{validate: {formats: "md,json"}}`); a flat mapping is rejected.
+- `results` normalizes the same way: a flat block of result keys (`glob`,
+  `log_glob`, `report_glob`, `manifest`, `log_family`) applies to every tool,
+  a per-tool map names tools, and the output is always tool -> keys. A block
+  that mixes result keys with tool names is refused. `preflight` values are
+  `dry_run` (a separate cheap check exists), `self_validating` (the run fails
+  fast on bad inputs), `none`; `no_solve`, the Ansys flag name the first
+  drafts used, is read as `dry_run`.
+- `tools` comes from the schema's `tools` key, not the process document, so
+  the two cannot drift. `extension_hints` keys are normalized to lowercase
+  with a leading dot.
+- A service without a `process` key is listed with `process: null`; a
+  document that fails validation is listed with `parse_error`. The command
+  exits 0 in both cases — a missing or broken convention is visible, never
+  silent. Deploy refuses an invalid file, so `parse_error` only appears on a
+  record written outside `ast services deploy`. A `process:` on a service
+  with no `tools` is refused too: schema consumers read `tools`, and without
+  it they would take `process` for a tool.
+
+```json
+{"getProcesses": [{
+  "process": "fab-package",
+  "service_name": "fab-package-automation",
+  "persistent_service_id": "ps-…", "service_id": "…", "service_status": "stopped",
+  "tools": ["assemble", "validate"],
+  "domain": "fab", "label": "…",
+  "volume_name": "…", "volume_id": "…",
+  "workspace_name": "…", "workspace_id": null,
+  "workspace_resolution": {"error": "not_found", "message": "…", "candidates": []},
+  "extension_hints": {".zip": ["validate"], ".xlsx": ["assemble"], ".tgz": ["assemble"]},
+  "runtime_class": {"assemble": "minutes", "validate": "minutes"},
+  "preflight": {"assemble": "self_validating", "validate": "self_validating"},
+  "results": {"assemble": {"report_glob": "results/*_report.json"}, "validate": {"report_glob": "results/*_report.json"}},
+  "default_inputs": {"validate": {"formats": "md,json"}}
+}]}
+```
+
+Read-only, no presigned URLs, no local filesystem, no env-backed values in the
+output — the posture the gateway's `run_ast` allow-list requires.
 
 ## Secrets
 
@@ -387,6 +512,343 @@ ast secrets delete --secret-id <SECRET_ID> --yes   # skip the prompt
 Editing cannot rename a secret — delete it and create it again under the new
 name.
 
+## Pre-auth
+
+Pre-auth starts a new Agent Studio server already logged in to `gh` and
+`claude`. It works by holding your logins as user-scoped `PREAUTH_*` secrets on
+the platform and materializing them onto each new server.
+
+That only happens once you are **enrolled** — once the platform actually holds
+those secrets. Enrollment is an upload from a server where you are already
+logged in, and it never happens automatically: nothing is uploaded without you
+asking for it.
+
+**Enrollment is per name, not all-or-nothing.** There are five `PREAUTH_*`
+names (the `gh` hosts file, the Claude credentials, the Claude onboarding keys,
+`git config --global user.name` and `user.email`), and each one is either held
+by the platform, available on this box, or simply not there. A box that seeded
+`gh` and `claude` and then gained a git identity has something left to
+contribute, and `status` says so.
+
+```bash
+# Where is each name? (says NOT ENROLLED when the platform holds nothing)
+ast preauth status
+
+# Enrollment, from a server where `gh` and `claude` are logged in
+ast preauth seed
+
+# Store only these names — `status` prints the exact line to paste
+ast preauth seed --only PREAUTH_GIT_USER_NAME,PREAUTH_GIT_USER_EMAIL
+
+# Re-upload names this box has already seeded
+ast preauth seed --overwrite
+
+# Debugging wrappers — the reconcile loop does both every 5 minutes
+ast preauth push          # push locally-rotated credentials back to the platform
+ast preauth materialize   # pull platform credentials and write them to disk
+```
+
+`status` prints the three name lists whenever the API sends them, and then the
+invocation that closes the gap:
+
+```
+  ENROLLED — the platform holds 2 pre-auth secret(s) for you.
+  on platform:                 PREAUTH_CLAUDE_CREDENTIALS_JSON_B64, PREAUTH_GH_HOSTS_YML_B64
+  can be stored from this box: PREAUTH_GIT_USER_EMAIL, PREAUTH_GIT_USER_NAME
+  not on this box:             PREAUTH_CLAUDE_ONBOARDING_JSON_B64
+
+  2 more can be stored from this box. Run:
+    ast preauth seed --only PREAUTH_GIT_USER_EMAIL,PREAUTH_GIT_USER_NAME
+```
+
+`--only` is comma-separated and repeatable, and it changes what a missing input
+means: with `--only` the caller has already established that those inputs exist,
+so one that has gone missing by the time the server reads it is a **skip** and
+the command still exits 0. A plain `ast preauth seed` attempts all five, and a
+name whose input is missing is a per-name **error** that exits non-zero. A name
+outside the five is rejected locally, before any request is made.
+
+`--only` also establishes that the server honours it before uploading anything.
+An anasync that does not advertise `enrolment.candidates` on `/preauth/status`
+ignores a `names` list and seeds all five, so a selection there would upload
+credentials the user never chose. The CLI checks with that read-only request
+first and, if the support is not there, refuses ("this server's anasync does not
+support per-name seeding; run `ast preauth seed` without --only, or update the
+server") without sending the mutation.
+
+`health` follows the same per-name view:
+
+| `health` | Meaning | Enrolled? |
+|---|---|---|
+| `unenrolled` | the platform holds nothing for you | no |
+| `partial` | the platform holds some names, and this box can still contribute others | **yes** |
+| `healthy` | the platform holds everything this box has | yes |
+| `degraded` | the last pull was incomplete or has not run | unchanged by this |
+| `error` | the last pull failed | unchanged by this |
+| `disabled` | pre-auth is off for this server | — |
+
+**These commands must run on the server itself.** They talk to the local
+anasync API at `http://localhost:8051` (override with `AST_ANASYNC_URL`), not to
+the platform API — no platform credential is used and nothing under `~/.ast` is
+read or written. Off a server you get:
+
+```
+cannot reach anasync API at http://localhost:8051 — this command must run on
+the Agent Studio server itself (…)
+```
+
+plus the equivalent `curl`, so you can run the request by hand on the right box:
+
+```bash
+curl -s http://localhost:8051/preauth/status
+curl -s -X POST http://localhost:8051/preauth/seed \
+  -H 'Content-Type: application/json' -d '{"overwrite":false}'
+curl -s -X POST http://localhost:8051/preauth/push
+curl -s -X POST http://localhost:8051/preauth/materialize
+```
+
+### Output and exit codes
+
+`ast preauth` is a human diagnostic, so it defaults to a readable summary and
+takes its own `--json` flag (the global `--format json` default cannot tell
+"asked for JSON" from "said nothing"). On **all four** commands `--json` is a
+**projection of the known fields** — the same allow-list the summary prints,
+rebuilt from the parsed response rather than passed through. No command echoes
+the response body in JSON mode: asking for machine-readable output must not
+disable the protection against a field the API adds later.
+
+| Command | What `--json` carries |
+|---|---|
+| `status` | the parsed status fields, including `enrolment.{candidates,held,missing}`, plus a derived `enrolled` boolean so scripts do not have to re-implement the rule |
+| `seed` | `status`, `reason`, `selection` (`requested` with `--only`, else `all`), `attempted` (names), and `seeded` / `skipped` / `errors` as `{name, reason?, fix?}` records |
+| `push` | `status`, `reason`, `exit`, and `pushed` / `skipped` as the same records |
+| `materialize` | `status`, `message`, `operation_id`, `log_file` |
+
+A body the CLI cannot parse projects to a restricted fallback instead — key
+*names*, never values: `{"shapeRecognised": false, "enrolled": null, "known":
+{…}, "topLevelKeys": […]}` for `status`, and `{"shapeRecognised": false,
+"status": …, "reason": …, "topLevelKeys": […]}` for a mutation. The exit code is
+decided from the raw body in either case, so what the projection can read never
+changes the verdict. Fields whose type the API may
+still change (`platformExpiresAt`, `backoffUntil`, `backoffSeconds`,
+`pushedExpiresAt`) are restricted to scalars in both modes — an object or a list
+there shows as `(unprintable)` rather than being read into — and a
+`state.push.terminal` entry contributes its `reason` string and nothing else. An
+HTTP error from anasync is reported as its status code plus, at most, FastAPI's
+short `detail` message; the response body is never echoed. A **name list** —
+`enrolment.candidates`, `enrolment.held`, `enrolment.missing` and
+`state.push.seeded` — is printed one entry at a time through an identifier
+guard: a `PREAUTH_*` name starts with `PREAUTH_`, is `[A-Za-z0-9_]` throughout
+and is at most 64 characters, so an entry that is not — a token-shaped string
+included — shows as `(unprintable)`. That holds in both modes and on the
+fallback path, so a field the API repurposes cannot echo through a list this CLI
+calls names.
+
+`status` exits 0 whenever the API answered — "not enrolled" is a report, not a
+failure. `seed`, `push` and `materialize` decide their exit code from the body
+(the endpoints answer HTTP 200 either way) and they read it structurally, not
+through the typed parse: a per-name error, an overall status of `error`, a
+missing status, or a status this CLI does not recognise all exit non-zero. A
+result whose success cannot be established is a failure, never a silent
+`unknown` and exit 0. Per-name errors are printed on stderr with the API's own fix
+text, e.g.:
+
+```
+  error    PREAUTH_GIT_USER_NAME — git config --global user.name is unset
+```
+
+Failures print the usual structured envelope on stderr, with
+`ANASYNC_UNREACHABLE` for a transport failure and `PREAUTH_FAILED` for
+everything else.
+
+### No credential value is ever printed
+
+The anasync state file holds sha256 markers, byte counts and timestamps only —
+never a value — and the seed/push endpoints return secret *names* only. The CLI
+does not rely on that: **every** output path of **every** `preauth` command is
+an allow-list, so a field the API starts returning is never echoed by accident.
+
+| Path | What it prints |
+|---|---|
+| `status` summary | the fields it knows about: health, enabled, state path, target names, status, sha256 prefix, byte count, `platformExpiresAt`, gitconfig key names, push bookkeeping |
+| `status --json` | a projection of those same parsed fields plus `enrolled` — not the response body |
+| `status` on an unparseable body | the known keys only (health, enabled, `enabledSource`, `statePath`, `enrolment.{enrolled,promptDue,reason,candidates,held,missing}`, `state.push.{seeded,lastAttempt,lastExit,lastError}`) where they hold a scalar, plus the top-level key *names* — with the name-list paths passed through the identifier guard |
+| `seed` / `push` / `materialize` summary | the status, the reason, and per-name records: the name, the API's reason and its fix text |
+| `seed` / `push` / `materialize` `--json` | a projection of those same parsed fields (see the table above) — not the response body |
+| a mutation on an unparseable body | the `status` and `reason` strings plus the top-level key *names*, with `shapeRecognised: false` |
+
+`preauth` also never resolves a platform credential, including in telemetry:
+`ast preauth …` skips the auth-derived identity lookup entirely, so no config
+file, token file or keyring is read for it.
+
+## Refresh
+
+`ast refresh` re-syncs the platform-managed resources on an Agent Studio server
+— skills, the compiled rules, MCP server configuration and secrets — without
+sudo and without restarting the editor. It is the manual equivalent of what
+anasync does at startup and whenever the platform says something changed.
+
+Like `preauth`, it talks to the local anasync API on the server itself
+(`http://localhost:8051`, override with `AST_ANASYNC_URL`), **not** to the
+platform API: no platform credential is used, and nothing under `~/.ast` is
+read or written.
+
+```bash
+# Everything, in the fixed order below
+ast refresh
+
+# One group at a time
+ast refresh --skills
+ast refresh --rules --mcp-servers
+
+# What would change? Writes nothing, exits 3 when there is drift
+ast refresh --check
+```
+
+| Flag | What it does |
+|---|---|
+| `--skills` | re-sync platform skills into `/workspace/skills` |
+| `--rules` | re-sync the compiled agent rules and reference docs |
+| `--mcp-servers` | re-sync MCP server configuration for every editor |
+| `--secrets` | re-sync secrets into `$AST_PATH/.secrets.env` |
+| `--all` | all four groups — the default when no group flag is given |
+| `--check` | report drift, write nothing (needs anasync-api 0.0.14+) |
+| `--url <URL>` | base URL of the local anasync API (env `AST_ANASYNC_URL`) |
+| `--timeout <SECS>` | seconds to wait for **one** group (default 120) |
+| `--json` | one JSON document instead of the human summary |
+
+**The group order is fixed**, whatever order the flags are given in: `secrets`
+→ `mcp-servers` → `rules` → `skills`. MCP server configs resolve
+`${secrets.NAME}` at generation time, so stale secrets would otherwise be baked
+into `~/.claude.json`, `~/.codex/config.toml` and `~/.gemini/settings.json`;
+skills goes last because it downloads and extracts zip packages and is by far
+the slowest, so the three cheap groups have already printed before the wait
+begins.
+
+```
+secrets: success
+  OPENAI_API_KEY                 updated
+  AWS_ACCESS_KEY_ID              unchanged
+  summary: 1 unchanged, 1 updated, 0 added, 0 removed, 0 failed
+  NOTE: $AST_PATH/.secrets.env is sourced at shell startup — open a NEW SHELL for these values to be visible. Existing shells and running agents keep the old environment.
+
+mcp-servers: success
+  github                         unchanged       ~/.claude.json
+  summary: 1 unchanged, 0 updated, 0 added, 0 removed, 0 failed
+
+rules: success
+  CLAUDE.md                      unchanged
+  summary: 1 unchanged, 0 updated, 0 added, 0 removed, 0 failed
+
+skills: success
+  sim-runner                     updated
+  job-runner                     unchanged
+  summary: 1 unchanged, 1 updated, 0 added, 0 removed, 0 failed
+
+Refreshed 4 of 4 groups — 4 unchanged, 2 updated, 0 added, 0 removed, 0 failed.
+```
+
+`--check` computes the same comparison and writes nothing:
+
+```
+$ ast refresh --check
+skills: success (check)
+  sim-runner                     would-update
+  job-runner                     unchanged
+  summary: 1 unchanged, 1 updated, 0 added, 0 removed, 0 failed
+
+Checked 4 groups — drift in 1 (skills). Nothing was written.
+$ echo $?
+3
+```
+
+**Secrets need a new shell.** `$AST_PATH/.secrets.env` is sourced at shell
+startup, so a refreshed value is invisible in the shell that ran the command —
+and to every agent already running. `ast refresh` says so whenever the secrets
+group ran; open a new shell rather than re-running the refresh.
+
+**Secrets print names and counts, nothing else.** For that group every string
+that reaches the output is fixed text, a validated environment variable name, a
+count, or a word from a closed vocabulary — never a string anasync sent. An
+item `detail`, the group `message`, an HTTP error body, an unrecognised accept
+status, the operation id and the log path are all replaced by fixed text
+pointing at the anasync operation log, because none of those fields is
+established to be value-free. That extends to the request URL — a failing poll
+reports `…/operations/<operation id>/status` rather than the id anasync chose,
+in the error envelope as well as on stdout. A secret that failed to sync is named, and the
+reason is in the log (`/var/log/anasync/`). Every other group keeps its full
+detail, including the operation id and the log path — which is why they are
+`null` for `secrets` in the `--json` sample above.
+
+**Exit codes**
+
+| Situation | Code |
+|---|---|
+| every selected group succeeded (in check mode: no drift) | 0 |
+| anasync unreachable, any group failed, or `--check` unsupported | 1 |
+| check mode, drift found, nothing failed | 3 |
+
+Drift is a report, not a failure: exit 3 prints no error envelope. Script it
+with `ast refresh --check; [ $? -eq 3 ]`.
+
+A check summary only says `no drift. Nothing was written.` when every group
+completed and confirmed check mode. If a group failed, could not compute the
+comparison, or ignored `--check`, the last line says so instead — `Checked 4
+groups — 1 could not be checked (skills); drift unknown.` — and the exit code
+is 1: an unchecked group is neither clean nor safe to describe as unwritten.
+
+`--timeout` is **per group**, not per command, so the worst case is four times
+the value. The default of 120 s is comfortably above the slowest group; a very
+large skill set may want `ast refresh --skills --timeout 300`.
+
+`--json` prints one document, rebuilt field by field from what this version
+understands — never the response body:
+
+```json
+{
+  "check": false,
+  "exit_code": 0,
+  "groups": {
+    "secrets": {
+      "ok": true, "supported": true, "drift": false, "truncated": false,
+      "status": "success",
+      "message": "2 secret name(s) reported, 0 failed — diagnostics withheld; see the anasync operation log",
+      "operation_id": null, "log_file": null,
+      "new_shell_required": true,
+      "notice": "NOTE: $AST_PATH/.secrets.env is sourced at shell startup — …",
+      "items": [{ "name": "OPENAI_API_KEY", "outcome": "updated", "detail": null }],
+      "summary": { "unchanged": 1, "updated": 1, "added": 0, "removed": 0, "failed": 0 },
+      "error": null
+    }
+  },
+  "totals": { "unchanged": 1, "updated": 1, "added": 0, "removed": 0, "failed": 0 }
+}
+```
+
+Group keys use the URL spelling, so the MCP group is hyphenated:
+`ast refresh --json | jq '.groups["mcp-servers"].summary'`.
+
+**anasync-api 0.0.14 or newer** is required for `--check` and for per-item
+detail. An older server reports the aggregate message per group and says that
+per-item detail needs a newer anasync; `--check` against one is refused *before
+any request is sent*, because the older API silently ignores the `check`
+parameter and would write. The CLI decides this from the `refresh.check` entry
+in `capabilities` on `GET /info/version`, never from the version number:
+anasync-api 0.0.12 and 0.0.13 shipped without check mode.
+
+**This command only works from a shell on an Agent Studio server.** Anywhere
+else it fails with `ANASYNC_UNREACHABLE` and prints the equivalent curl. By
+hand, the same thing is:
+
+```bash
+curl -s -X POST http://localhost:8051/skills/refresh
+curl -s -X POST 'http://localhost:8051/skills/refresh?check=true'
+curl -s http://localhost:8051/operations/<operation_id>/status
+```
+
+A refresh that anasync is already running is not cancelled: `ast refresh`
+starts its own operation and reports what that operation says.
+
 ## Rules
 
 Rules are markdown documents that shape how agents behave. They are compiled
@@ -452,6 +914,10 @@ agents rely on.
 | `--bearer-token <TOKEN>` | Bearer token | — |
 | `-v, --verbose` | Enable verbose logging | off |
 
+`preauth` and `refresh` are the exceptions to `--format`: both default to a
+human summary and take their own `--json` flag (see [Pre-auth](#pre-auth) and
+[Refresh](#refresh)).
+
 ## Configuration
 
 Config is stored at `~/.ast/config.yaml`:
@@ -460,6 +926,10 @@ Config is stored at `~/.ast/config.yaml`:
 apikey: <your-api-key>
 environment: <last-used-auth-url>
 ```
+
+| Environment variable | Description | Default |
+|---|---|---|
+| `AST_ANASYNC_URL` | Base URL of the local anasync API used by `ast preauth` and `ast refresh` (server-only; the request never goes through an egress proxy) | `http://localhost:8051` |
 
 ## License
 

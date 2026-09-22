@@ -69,8 +69,13 @@ These apply to every command:
 | `--api-key <KEY>` | API key, overrides config (env: `AST_API_KEY`) | — |
 | `--bearer-token <TOKEN>` | Bearer token, overrides API key (env: `AST_BEARER_TOKEN`) | — |
 | `-v, --verbose` | Debug logging | off |
+| `AST_ANASYNC_URL` (env only) | Base URL of the local anasync API used by `preauth` and `refresh` — server-only, no platform credential | `http://localhost:8051` |
 
 Auth priority: `--bearer-token` > `--api-key` > config file > keychain token.
+
+`--format` applies everywhere except the `preauth` group and `refresh`, which
+are human diagnostics: both default to a readable summary and take their own
+`--json` flag.
 
 ---
 
@@ -645,6 +650,11 @@ $CLI service-jobs get --workspace-id <WS_ID> --format table
 ## Run a Persistent-Service Job (e.g. a solver)
 
 ```bash
+# Which process runs where — persistent service, store volume, jobs workspace,
+# tools — with this environment's ids (never copy ids from a document)
+$CLI processes get --organization-id <ORG_ID>
+$CLI processes get --extension .aedt   # by input file type
+
 # Discover the service and its tools
 $CLI persistent-services get --workspace-id <WS_ID> --format table
 $CLI persistent-services get --persistent-service-id <PS_ID> --format table
@@ -669,7 +679,7 @@ $CLI persistent-services jobs status --ps-job-id <PS_JOB_ID> --workspace-id <WS_
 Services are developed **on servers** inside the IDE:
 
 1. **Scaffold** — Use templates from `~/.agent-studio/templates` or ask the agent
-2. **Configure** — Edit `service.yaml` (name, description, tools, inputs, outputs)
+2. **Configure** — Edit `service.yaml` (name, description, tools, inputs, outputs; optional top-level `rules:` for the agent-facing document and `process:` for the `process.yaml` discovery block that `processes get` reads)
 3. **Implement** — Write tool handlers, `entrypoint.py`, Dockerfile
 4. **Build** — `docker build -t my-service -f .devcontainer/Dockerfile .`
 5. **Test locally** — `docker run -e payload='{"tool":"...","inputs":{...}}' -v /workspace:/workspace -u $(id -u):$(id -g) my-service`
@@ -771,7 +781,7 @@ Notes:
 | `services create` | `--organization-id`, `--service-type-id`, `--name` | `--description`, `--instance`, `--tags` |
 | `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` |
 | `services delete` | `--service-id` | — |
-| `services deploy` | `--service-id` | — |
+| `services deploy` | `--service-id` unless the service file has a remote saved for the target `--env` (one remote per environment; a missing or ambiguous match is refused, never guessed) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--no-push`, `--no-poll` |
 | `services types` | — | — |
 | `services instance-types` | — | — |
 | `services add-to-workspace` | `--workspace-id` | `--service-ids` |
@@ -793,7 +803,7 @@ Notes:
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `persistent-services get` | — | `--persistent-service-id` (detail view incl. tools), `--organization-id`, `--workspace-id`, `--limit` (50), `--cursor` |
+| `persistent-services get` | — | `--persistent-service-id` (detail view incl. tools), `--organization-id`, `--workspace-id`, `--limit` (50), `--cursor`, `--fields` (GraphQL selection, e.g. `name,persistentServiceId,status` — the default record carries `serviceSchema` + `serviceRules`, tens of KB per service) |
 | `persistent-services start` | `--persistent-service-id` | — |
 | `persistent-services stop` | `--persistent-service-id` | — |
 | `persistent-services restart` | `--persistent-service-id` | — |
@@ -822,6 +832,32 @@ Notes:
   presigned URLs (~24 h) regenerated on every query; re-run `jobs status`
   for fresh links. A completed container does not by itself mean the solve
   succeeded — check the log.
+
+## processes — Process discovery index
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `processes get` | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id` (narrows; not read from env), `--name`, `--process`, `--domain`, `--extension` |
+
+Notes:
+- One record per persistent service in the organization: `process`, `domain`,
+  `service_name`, `persistent_service_id`, `service_id`, `service_status`,
+  `tools` (from the service schema), `volume_name` → `volume_id`,
+  `workspace_name` → `workspace_id` (exact-name resolution; `null` plus a
+  `volume_resolution`/`workspace_resolution` with candidates when zero or
+  several match — never guess, never ask the user for a UUID; the volume is
+  looked up in the organization's volumes and in the resolved workspace's),
+  `extension_hints`, `runtime_class` and `preflight` (always per-tool maps:
+  `{"assemble": "minutes", "validate": "minutes"}` — read the entry for the
+  tool you are submitting), `results` (per tool: `glob` / `log_glob` / `report_glob` / `manifest` / `log_family`; a flat block in the file applies to every tool), `default_inputs` (keyed by tool). `preflight` is `dry_run` | `self_validating` | `none` (`no_solve` reads as `dry_run`). Field reference: `docs/process-yaml.md`.
+- The bindings are authored in `process.yaml` next to `service.yaml`, pointed
+  at by a top-level `process:` key (`eclipse_process: 1`, see the README
+  "Processes" section). `services deploy` validates it against `service.tools`
+  and folds it into the service schema as `process`. A service without it is
+  listed with `process: null`; an invalid document with `parse_error`; exit
+  code stays 0.
+- Read-only and URL-free — the same command runs through the gateway's
+  `run_ast(["processes", "get", "--organization-id", "<ORG_ID>"])` on Desktop.
 
 ## servers — Server management
 
@@ -866,7 +902,7 @@ MCP (Model Context Protocol) Configs connect additional MCP servers to extend ag
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `mcp-servers get` | `--mode` (`organization`\|`workspace`\|`user`\|`all`\|`aggregated`) | `--organization-id`, `--workspace-id` |
+| `mcp-servers get` | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`) | `--organization-id`, `--workspace-id` |
 | `mcp-servers create` | `--scope-type` (`organization`\|`workspace`\|`user`), `--name`, `--config` (JSON) | `--organization-id`, `--workspace-id`, `--description`, `--enabled` |
 | `mcp-servers edit` | `--mcp-server-id` | `--name`, `--description`, `--config`, `--enabled` |
 | `mcp-servers delete` | `--mcp-server-id` | — |
@@ -885,8 +921,8 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `skills get` | — | `--mode`, `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
-| `skills create` | `--scope-type`, `--name`, `--file` (.tar.gz) | `--organization-id`, `--workspace-id`, `--description`, `--version`, `--config` |
+| `skills get` | — | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`; defaults to `--scope-type`, else `aggregated` in a workspace), `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
+| `skills create` | `--scope-type`, `--name`, `--file` (.tar.gz) | `--organization-id`, `--workspace-id`, `--description`, `--version`, `--config`, `--enabled` |
 | `skills edit` | `--skill-id` | `--name`, `--description`, `--version`, `--config`, `--enabled` |
 | `skills delete` | `--skill-id` | — |
 | `skills replace-package` | `--skill-id`, `--file` | — |
@@ -930,6 +966,93 @@ A trailing newline is stripped from `--value-stdin` and `--value-file`.
 **Bulk import** with `--env-file` creates one secret per `KEY=VALUE` line. Comments, blank lines, `export ` prefixes, and quoted values are handled. Multi-line values (a PEM spanning lines) are **not** supported and are rejected — create those individually with `--value-file`.
 
 **Deleting** prompts for confirmation in an interactive terminal. When running non-interactively the command proceeds without prompting, so confirm with the user yourself before calling it.
+
+## preauth — Pre-auth enrollment (server-only)
+
+Pre-auth makes a newly created Agent Studio server boot already logged in to `gh` and `claude`. It works by holding the user's logins as user-scoped `PREAUTH_*` secrets on the platform and materializing them onto each new server. None of that happens until the user is **enrolled** — until the platform actually holds those secrets, which takes an upload (`seed`) from a server where they are already logged in.
+
+**Enrollment is per name.** There are five names — `PREAUTH_GH_HOSTS_YML_B64`, `PREAUTH_CLAUDE_CREDENTIALS_JSON_B64`, `PREAUTH_CLAUDE_ONBOARDING_JSON_B64`, `PREAUTH_GIT_USER_NAME`, `PREAUTH_GIT_USER_EMAIL` — and each is held by the platform, available on this box, or absent. `status` prints `on platform:`, `can be stored from this box:` and `not on this box:`, then the exact `seed --only` line for the difference. `health` is `unenrolled` before any name is stored, `partial` while this box can still contribute names the platform does not hold, and `healthy` once the platform holds everything this box has — **`partial` counts as enrolled**.
+
+| Command | Options | What it does |
+|---------|---------|--------------|
+| `preauth status` | `--json` | `GET /preauth/status` — per-name view; says **NOT ENROLLED** when the platform holds nothing yet |
+| `preauth seed` | `--only`, `--overwrite`, `--json` | `POST /preauth/seed` — the upload; prints names only |
+| `preauth push` | `--json` | `POST /preauth/push` — debugging wrapper; the reconcile loop does this every 5 min |
+| `preauth materialize` | `--json` | `POST /preauth/materialize` — asynchronous; answers `accepted` and finishes in the background |
+
+**These commands only work from a shell on an Agent Studio server.** They talk to the local anasync API (`http://localhost:8051`, override with `AST_ANASYNC_URL`), not to the platform API — no platform credential, no `~/.ast` access. Anywhere else they fail with `ANASYNC_UNREACHABLE` ("cannot reach anasync API at … — this command must run on the Agent Studio server itself") and print the equivalent `curl`.
+
+**Never run `ast preauth seed` without asking the user first.** Seeding uploads their GitHub and Claude logins to the platform. The design of this feature is that nothing is stored without an explicit, informed "yes" — the editor's enrollment prompt works the same way. The correct agent workflow is:
+
+```bash
+# 1. Check, from a shell on the server
+ast preauth status --json | jq -r '.enrolment.candidates[]'
+```
+
+2. If `candidates` is empty there is nothing to ask about and nothing to seed — stop. Otherwise **ask the user**, in your own words, naming exactly what a yes would store. Build that sentence from the candidate names; the CLI projects names only, so there is no server-written prompt to quote:
+
+| Candidate name | Say |
+|---|---|
+| `PREAUTH_GH_HOSTS_YML_B64` | your GitHub login |
+| `PREAUTH_CLAUDE_CREDENTIALS_JSON_B64`, `PREAUTH_CLAUDE_ONBOARDING_JSON_B64` | your Claude login |
+| `PREAUTH_GIT_USER_NAME`, `PREAUTH_GIT_USER_EMAIL` | your git identity (user.name, user.email) |
+
+e.g. for `PREAUTH_GIT_USER_NAME` + `PREAUTH_GIT_USER_EMAIL`: *"Store your git identity (user.name, user.email) on the platform, so new servers commit as you?"*
+
+3. Only on a yes, seed exactly the names you asked about:
+
+```bash
+ast preauth seed --only PREAUTH_GIT_USER_NAME,PREAUTH_GIT_USER_EMAIL
+```
+
+**Never widen the consented set.** Seed the names the user was asked about and no others: drop `--only` and you attempt all five, which uploads credentials nobody agreed to. If `enrolment.candidates` is empty there is nothing to ask about and nothing to seed. On an older anasync that sends no `candidates`, ask about GitHub and Claude in as many words and run plain `ast preauth seed`.
+
+`--only` is comma-separated and repeatable, and it changes what a missing input means: with `--only`, a name whose input has vanished since `status` ran is a **skip** and the command exits 0; without it, a missing input is a per-name **error** and the command exits 1. A name outside the five is rejected locally, before any request leaves the box. `--only` also checks the server first: an anasync that does not advertise `enrolment.candidates` ignores `names` and would seed all five, so the CLI refuses (`does not support per-name seeding`) and sends no upload at all.
+
+**Never echo a credential.** The CLI prints secret *names*, sha256 markers, byte counts and timestamps only — the anasync state file holds no values by contract, and every output path of all four commands is an allow-list, so a new API field is never echoed by accident: the summary prints named fields, and `--json` is a **projection of the known fields** on every one of them — never the response body, in any mode. `status --json` carries the parsed status fields — including `enrolment.{candidates,held,missing}` — plus `enrolled`; `seed --json` carries `status`, `reason`, `selection` (`requested` with `--only`, else `all`), `attempted` and `seeded`/`skipped`/`errors` as `{name, reason?, fix?}` records; `push --json` carries `status`, `reason`, `exit` and `pushed`/`skipped`; `materialize --json` carries `status`, `message`, `operation_id` and `log_file`. A response the CLI cannot parse degrades to the known scalars (for a mutation: `status` and `reason`) plus the top-level key *names*, with `shapeRecognised: false`. Every name list (`enrolment.candidates`/`held`/`missing`, `push.seeded`) passes an identifier guard first — a `PREAUTH_*` name starts with `PREAUTH_`, is `[A-Za-z0-9_]` throughout and is at most 64 characters, and an entry that is not — a token-shaped string included — prints as `(unprintable)`, in both modes and on the fallback path. Do not work around this by reading `~/.config/gh/hosts.yml` or `~/.claude/.credentials.json` yourself.
+
+**Exit codes.** `status` exits 0 whenever the API answered — "not enrolled" is a report, not a failure; script it with `ast preauth status --json | jq .enrolled` (the CLI adds that derived field; it is `null`, with `shapeRecognised: false`, when the CLI could not parse the response). `seed`, `push` and `materialize` exit non-zero on any per-name error, an overall `status: "error"`, a missing status, or a status the CLI does not recognise; the endpoints return HTTP 200 even when they fail, so the body decides — and a result whose success cannot be established is treated as a failure. Per-name errors carry their own fix text and go to stderr — surface them verbatim:
+
+```
+  error    PREAUTH_GIT_USER_NAME — git config --global user.name is unset
+```
+
+## refresh — Re-sync platform resources (server-only)
+
+`ast refresh` re-syncs what the platform manages on an Agent Studio server — skills, the compiled rules, MCP server configuration and secrets — without sudo and without restarting the editor. It is the manual equivalent of the sync anasync runs at startup and on `entityChanged`. Use it after the user changes a skill, a rule, an MCP server or a secret on the platform and wants it live on this server now.
+
+| Command | Options | What it does |
+|---------|---------|--------------|
+| `refresh` | — | all four groups, in the fixed order below |
+| `refresh --check` | — | report drift, write nothing; **exit 3** when drift is found |
+| `refresh --skills` | | re-sync platform skills into `/workspace/skills` |
+| `refresh --rules` | | re-sync the compiled agent rules and reference docs |
+| `refresh --mcp-servers` | | re-sync MCP server configuration for every editor |
+| `refresh --secrets` | | re-sync secrets into `$AST_PATH/.secrets.env` |
+| `refresh --all` | | all four groups (the default when no group flag is given) |
+| any of the above | `--url <URL>` | base URL of the local anasync API (env `AST_ANASYNC_URL`) |
+| any of the above | `--timeout <SECS>` | seconds to wait for **one** group, default 120 |
+| any of the above | `--json` | one JSON document instead of the human summary |
+
+**The group order is fixed** whatever order the flags are typed in: `secrets` → `mcp-servers` → `rules` → `skills`. MCP configs resolve `${secrets.NAME}` when they are generated, so stale secrets would be baked into the editor configs; skills runs last because it downloads and extracts zip packages and is the slow one.
+
+**This only works from a shell on an Agent Studio server.** It talks to the local anasync API (`http://localhost:8051`, override with `AST_ANASYNC_URL`), not to the platform API — no platform credential, no `~/.ast` access. Anywhere else it fails with `ANASYNC_UNREACHABLE` ("cannot reach anasync API at … — this command must run on the Agent Studio server itself") and prints the equivalent `curl`.
+
+**Exit codes.** 0 = every selected group succeeded (in check mode: no drift). 1 = anasync unreachable, a group failed, or `--check` is unsupported. **3 = check mode found drift — a report, not a failure**, so it prints no error envelope. Script it:
+
+```bash
+ast refresh --check; [ $? -eq 3 ] && echo "something is out of date"
+```
+
+**After refreshing secrets, tell the user to open a new shell.** `$AST_PATH/.secrets.env` is sourced at shell startup, so refreshed values are invisible in the current shell and to every agent already running — including you. Do not re-run `ast refresh` expecting the current shell to pick them up; it will not.
+
+**`--check` and per-item detail need anasync-api 0.0.14 or newer** (the CLI gates on the `refresh.check` capability from `/info/version`, not on the version number). On an older server, `--check` is refused before any request is sent (the older API ignores the parameter and would write), and an apply run prints the aggregate message per group instead of per-item outcomes.
+
+`--json` is a projection of the fields this CLI version understands, never the response body. Group keys use the URL spelling, so the MCP key is hyphenated:
+
+```bash
+ast refresh --json | jq '.groups["mcp-servers"].summary'
+```
 
 ## rules — Platform rules
 
