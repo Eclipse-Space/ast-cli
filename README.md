@@ -390,6 +390,9 @@ them. Per record:
   organization. `volume_name` resolves against the organization's volumes
   **plus the volumes attached to that workspace** — a workspace's own volume
   (`<workspace> Workspace Volume`) is not in the organization-scoped listing.
+  A name neither has is looked up once more among every volume the caller can
+  list in the organization (the `ast volumes get` listing, which keeps
+  workspace volumes — including one whose workspace was deleted).
   Zero or several matches emit `volume_resolution` / `workspace_resolution`
   (`not_found` | `ambiguous`, with the candidates) and a `null` id — the verb
   never guesses.

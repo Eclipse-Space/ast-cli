@@ -846,7 +846,8 @@ Notes:
   `workspace_name` → `workspace_id` (exact-name resolution; `null` plus a
   `volume_resolution`/`workspace_resolution` with candidates when zero or
   several match — never guess, never ask the user for a UUID; the volume is
-  looked up in the organization's volumes and in the resolved workspace's),
+  looked up in the organization's volumes and in the resolved workspace's,
+  then among every volume the caller can list in the organization),
   `extension_hints`, `runtime_class` and `preflight` (always per-tool maps:
   `{"assemble": "minutes", "validate": "minutes"}` — read the entry for the
   tool you are submitting), `results` (per tool: `glob` / `log_glob` / `report_glob` / `manifest` / `log_family`; a flat block in the file applies to every tool), `default_inputs` (keyed by tool). `preflight` is `dry_run` | `self_validating` | `none` (`no_solve` reads as `dry_run`). Field reference: `docs/process-yaml.md`.
