@@ -235,7 +235,7 @@ ast rules get-*      Show platform/organization/workspace/service/user rules
 ast rules edit-*     Replace organization/workspace/service/user rules
 ast processes get    Process discovery index (which service, volume and workspace run each process)
 ast preauth status   Show per-name pre-auth enrollment status (on a server)
-ast preauth seed     Store this server's gh + Claude logins on the platform
+ast preauth seed     Store this server's gh, Claude and Codex logins on the platform
 ast refresh          Re-sync skills, rules, MCP config and secrets (on a server)
 ast refresh --check  Report drift without writing (exit 3 when drift is found)
 ```
@@ -527,8 +527,8 @@ those secrets. Enrollment is an upload from a server where you are already
 logged in, and it never happens automatically: nothing is uploaded without you
 asking for it.
 
-**Enrollment is per name, not all-or-nothing.** There are five `PREAUTH_*`
-names (the `gh` hosts file, the Claude credentials, the Claude onboarding keys,
+**Enrollment is per name, not all-or-nothing.** There are six `PREAUTH_*`
+names (the `gh` hosts file, the Claude credentials, the Claude onboarding keys, the Codex login,
 `git config --global user.name` and `user.email`), and each one is either held
 by the platform, available on this box, or simply not there. A box that seeded
 `gh` and `claude` and then gained a git identity has something left to
@@ -568,13 +568,14 @@ invocation that closes the gap:
 `--only` is comma-separated and repeatable, and it changes what a missing input
 means: with `--only` the caller has already established that those inputs exist,
 so one that has gone missing by the time the server reads it is a **skip** and
-the command still exits 0. A plain `ast preauth seed` attempts all five, and a
-name whose input is missing is a per-name **error** that exits non-zero. A name
-outside the five is rejected locally, before any request is made.
+the command still exits 0. A plain `ast preauth seed` attempts every name, and a
+name whose input is missing is a per-name **error** that exits non-zero, except
+a missing Codex login, which is skipped (an invalid Codex `auth.json` is still
+an error). A name outside the known names is rejected locally, before any request is made.
 
 `--only` also establishes that the server honours it before uploading anything.
 An anasync that does not advertise `enrolment.candidates` on `/preauth/status`
-ignores a `names` list and seeds all five, so a selection there would upload
+ignores a `names` list and seeds every name, so a selection there would upload
 credentials the user never chose. The CLI checks with that read-only request
 first and, if the support is not there, refuses ("this server's anasync does not
 support per-name seeding; run `ast preauth seed` without --only, or update the
