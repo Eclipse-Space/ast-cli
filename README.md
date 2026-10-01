@@ -242,7 +242,8 @@ ast refresh --check  Report drift without writing (exit 3 when drift is found)
 
 Further command groups: `organizations`, `members`, `volumes`, `volume-data`,
 `services`, `service-jobs`, `persistent-services`, `processes`, `skills`,
-`servers`, `mcp-servers`, `api-keys`, `preauth`, `refresh`, `rules`, `schema`.
+`servers`, `mcp-servers`, `api-keys`, `tags`, `categories`, `preauth`, `refresh`,
+`rules`, `schema`.
 Run `ast <group> --help` for details.
 
 ## Volume Data

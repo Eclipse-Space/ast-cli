@@ -569,7 +569,8 @@ $CLI workspaces create \
   --description "Description"
 
 # 2. Attach services to the workspace
-$CLI services get --format table                # browse available services
+$CLI services get --format table                # browse services; Tags and Category (label) columns show each service's labels
+# for tag lookups use the default JSON (tags, category, categoryLabel), e.g. | jq '.getServices[] | select(.tags | index("cfd"))'
 $CLI services add-to-workspace \
   --workspace-id <WS_ID> \
   --service-ids <SERVICE_ID>
@@ -779,7 +780,7 @@ Notes:
 |---------|-----------------|----------|
 | `services get` | — | `--organization-id`, `--workspace-id`, `--service-id`, `--limit` (50), `--cursor`, `--fields`, `--filters` |
 | `services create` | `--organization-id`, `--service-type-id`, `--name` | `--description`, `--instance`, `--tags` |
-| `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` |
+| `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` (replace all), `--add-tag`, `--remove-tag` (repeatable; not with `--tags`), `--category <slug>`, `--clear-category` |
 | `services delete` | `--service-id` | — |
 | `services deploy` | `--service-id` unless the service file has a remote saved for the target `--env` (one remote per environment; a missing or ambiguous match is refused, never guessed) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--no-push`, `--no-poll` |
 | `services types` | — | — |
@@ -903,9 +904,9 @@ MCP (Model Context Protocol) Configs connect additional MCP servers to extend ag
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `mcp-servers get` | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`) | `--organization-id`, `--workspace-id` |
-| `mcp-servers create` | `--scope-type` (`organization`\|`workspace`\|`user`), `--name`, `--config` (JSON) | `--organization-id`, `--workspace-id`, `--description`, `--enabled` |
-| `mcp-servers edit` | `--mcp-server-id` | `--name`, `--description`, `--config`, `--enabled` |
+| `mcp-servers get` | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`) | `--organization-id`, `--workspace-id`, `--tag` (repeatable, all must match), `--category` (repeatable, any may match) |
+| `mcp-servers create` | `--scope-type` (`organization`\|`workspace`\|`user`), `--name`, `--config` (JSON) | `--organization-id`, `--workspace-id`, `--description`, `--enabled`, `--tag` (repeatable), `--category <slug>` |
+| `mcp-servers edit` | `--mcp-server-id` | `--name`, `--description`, `--config`, `--enabled`, `--tag` (repeatable, replaces all), `--add-tag`, `--remove-tag` (repeatable; not with `--tag`), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped server's labels) |
 | `mcp-servers delete` | `--mcp-server-id` | — |
 | `mcp-servers overrides` | `--workspace-id` | — |
 | `mcp-servers toggle-override` | `--workspace-id`, `--mcp-server-id` | — |
@@ -924,11 +925,20 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 |---------|-----------------|----------|
 | `skills get` | — | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`; defaults to `--scope-type`, else `aggregated` in a workspace), `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
 | `skills create` | `--scope-type`, `--name`, `--file` (.tar.gz) | `--organization-id`, `--workspace-id`, `--description`, `--version`, `--config`, `--enabled` |
-| `skills edit` | `--skill-id` | `--name`, `--description`, `--version`, `--config`, `--enabled` |
+| `skills edit` | `--skill-id` | `--name`, `--description`, `--version`, `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
 | `skills delete` | `--skill-id` | — |
 | `skills replace-package` | `--skill-id`, `--file` | — |
 | `skills overrides` | `--workspace-id` | — |
 | `skills toggle-override` | `--workspace-id`, `--skill-id` | — |
+
+## tags, categories — Labels
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `tags get` (alias `list`) | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--prefix` |
+| `categories get` (alias `list`) | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org) |
+
+Tags are free-form labels (the server normalizes them); categories are the organization's fixed vocabulary — pass a `slug` from `categories list`. On `edit`, leaving out `--category`/`--clear-category` keeps the current category.
 
 ## secrets — Secret management
 
