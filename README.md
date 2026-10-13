@@ -292,6 +292,23 @@ MCP gateway's `load_skill`):
 - The archive is a **zip** with `SKILL.md` at the root (the Agent Skills
   package layout used by `skills create`/`replace-package`).
 
+## Plugins
+
+Claude Code plugins, from a supported marketplace (`claude-plugins-official`,
+`claude-community`) or uploaded as a custom directory/.zip (max 10 MB) containing
+`.claude-plugin/plugin.json` with a `name` of letters, digits, `-` or `_`.
+`list`, `attach` and `detach` work on both kinds. Organization-scoped plugins are
+catalogue only until attached to a workspace.
+
+```bash
+ast plugins add --name commit-commands --organization-id <ORG_ID>    # = commit-commands@claude-plugins-official
+ast plugins upload --path ./my-plugin --organization-id <ORG_ID>
+ast plugins list --mode organization --organization-id <ORG_ID>     # the whole catalogue, attached or not
+ast plugins list --workspace-id <WS_ID>                             # aggregated: what the workspace runs
+ast plugins attach --plugin-id <PLUGIN_ID> --workspace-id <WS_ID>
+ast plugins detach --plugin-id <PLUGIN_ID> --workspace-id <WS_ID>
+```
+
 ## Persistent Services
 
 Persistent services are long-running solver/tool instances that cache state

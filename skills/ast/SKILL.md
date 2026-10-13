@@ -419,6 +419,8 @@ Once the user is on a server, introduce concepts **only when the user's current 
 | Build a custom tool | **Service development** | Walk through scaffold → build → test → deploy on the server |
 | Share with teammates | **Members** | Add members to the org or share workspace access |
 | Reuse prompts or workflows | **Skills** | Explain skills, show how to create or attach one |
+| Add a marketplace Claude Code plugin | **Plugins** | `plugins add --name <name>[@<marketplace>]`, then `plugins attach --plugin-id <ID> --workspace-id <ID>` |
+| Add a custom Claude Code plugin | **Plugins** | `plugins upload --path <dir>`, then `plugins attach --plugin-id <ID> --workspace-id <ID>` |
 
 **Always frame concepts in terms of the user's goal**, not as abstract platform features. For example:
 - Good: "To get your data onto the server, we'll create a volume — think of it as a shared folder."
