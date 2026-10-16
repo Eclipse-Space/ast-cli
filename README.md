@@ -242,7 +242,7 @@ ast refresh --check  Report drift without writing (exit 3 when drift is found)
 
 Further command groups: `organizations`, `members`, `volumes`, `volume-data`,
 `services`, `service-jobs`, `persistent-services`, `processes`, `skills`,
-`servers`, `mcp-servers`, `api-keys`, `tags`, `categories`, `preauth`, `refresh`,
+`servers`, `mcp-servers`, `api-keys`, `tags`, `categories`, `web-apps`, `preauth`, `refresh`,
 `rules`, `schema`.
 Run `ast <group> --help` for details.
 
@@ -297,14 +297,16 @@ MCP gateway's `load_skill`):
 Claude Code plugins, from a supported marketplace (`claude-plugins-official`,
 `claude-community`) or uploaded as a custom directory/.zip (max 10 MB) containing
 `.claude-plugin/plugin.json` with a `name` of letters, digits, `-` or `_`.
-`list`, `attach` and `detach` work on both kinds. Organization-scoped plugins are
+`get` (alias `list`), `edit`, `delete`, `attach` and `detach` work on both kinds. Organization-scoped plugins are
 catalogue only until attached to a workspace.
 
 ```bash
 ast plugins add --name commit-commands --organization-id <ORG_ID>    # = commit-commands@claude-plugins-official
-ast plugins upload --path ./my-plugin --organization-id <ORG_ID>
-ast plugins list --mode organization --organization-id <ORG_ID>     # the whole catalogue, attached or not
-ast plugins list --workspace-id <WS_ID>                             # aggregated: what the workspace runs
+ast plugins upload --file ./my-plugin --organization-id <ORG_ID>
+ast plugins get --mode organization --organization-id <ORG_ID>       # the whole catalogue, attached or not
+ast plugins get --workspace-id <WS_ID>                               # aggregated: what the workspace runs
+ast plugins edit --plugin-id <PLUGIN_ID> --enabled true              # or --description "..." ("" clears)
+ast plugins delete --plugin-id <PLUGIN_ID>                           # also removes its workspace overrides
 ast plugins attach --plugin-id <PLUGIN_ID> --workspace-id <WS_ID>
 ast plugins detach --plugin-id <PLUGIN_ID> --workspace-id <WS_ID>
 ```

@@ -420,7 +420,8 @@ Once the user is on a server, introduce concepts **only when the user's current 
 | Share with teammates | **Members** | Add members to the org or share workspace access |
 | Reuse prompts or workflows | **Skills** | Explain skills, show how to create or attach one |
 | Add a marketplace Claude Code plugin | **Plugins** | `plugins add --name <name>[@<marketplace>]`, then `plugins attach --plugin-id <ID> --workspace-id <ID>` |
-| Add a custom Claude Code plugin | **Plugins** | `plugins upload --path <dir>`, then `plugins attach --plugin-id <ID> --workspace-id <ID>` |
+| Add a custom Claude Code plugin | **Plugins** | `plugins upload --file <dir>`, then `plugins attach --plugin-id <ID> --workspace-id <ID>` |
+| Change or remove a Claude Code plugin | **Plugins** | `plugins get --mode organization`, `plugins edit --plugin-id <ID> --enabled true\|false` / `--description`, `plugins delete --plugin-id <ID>` |
 
 **Always frame concepts in terms of the user's goal**, not as abstract platform features. For example:
 - Good: "To get your data onto the server, we'll create a volume — think of it as a shared folder."
@@ -941,6 +942,14 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 | `categories get` (alias `list`) | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org) |
 
 Tags are free-form labels (the server normalizes them); categories are the organization's fixed vocabulary — pass a `slug` from `categories list`. On `edit`, leaving out `--category`/`--clear-category` keeps the current category.
+
+## web-apps — Web apps
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `web-apps list` (alias `get`) | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--status` (repeatable: pending, running, stopped, stale), `--text`, `--limit` (default 50) |
+
+The `url` of each app opens only in a browser signed in to Agent Studio; stale apps need their server started first.
 
 ## secrets — Secret management
 
