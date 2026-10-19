@@ -197,6 +197,7 @@ AST_CONFIG_DIR=/scratch/ast   # config, token, and upload checkpoints go here, n
 AST_TELEMETRY_DISABLED=1      # no PostHog events, no ~2 s flush per invocation
 AST_ORGANIZATION_ID=<org>     # pin context explicitly
 AST_WORKSPACE_ID=<ws>         # pin context explicitly
+AST_CLIENT_NAME=<client>      # optional: the client you act for, sent as x-client-name
 ```
 
 With this contract in place:
@@ -209,8 +210,12 @@ With this contract in place:
   the OAuth refresh path, so an auth failure surfaces immediately instead of
   reading and rewriting the stored token file. Refresh still works for
   interactive `auth login` sessions.
+- With `AST_CLIENT_NAME` set, every GraphQL request carries it as
+  `x-client-name`, so the platform can record which client a change came
+  from. Presigned storage uploads never carry it.
 
-These behaviors are pinned by the `tests/server_mode.rs` integration tests.
+These behaviors are pinned by the `tests/server_mode.rs` and
+`tests/client_name.rs` integration tests.
 
 ## Environments
 
@@ -954,6 +959,7 @@ environment: <last-used-auth-url>
 | Environment variable | Description | Default |
 |---|---|---|
 | `AST_ANASYNC_URL` | Base URL of the local anasync API used by `ast preauth` and `ast refresh` (server-only; the request never goes through an egress proxy) | `http://localhost:8051` |
+| `AST_CLIENT_NAME` | The client a service runs `ast` for (the MCP gateway sets its connector's client), sent on every GraphQL request as the `x-client-name` header. A telemetry label, never used for permissions. Blank, longer than 128 characters or not visible ASCII sends no header | unset (no header) |
 
 ## License
 
