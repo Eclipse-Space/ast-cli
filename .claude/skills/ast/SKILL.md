@@ -107,6 +107,8 @@ cd /workspace/repos/agent-studio-cli
 $CLI auth login 2>&1
 ```
 
+The labels below are printed when stdout is not a terminal (the usual agent shell). If you run `ast` under a pseudo-terminal, set `AST_AGENT=1` (or pass `--format json`); otherwise `auth login` prints a plain link for a person and waits.
+
 ### Expected Output
 
 ```

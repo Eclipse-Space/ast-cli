@@ -25,7 +25,7 @@ Or use `/plugin` and follow the interactive menu.
 
 This installs the `ast` plugin, which:
 - Adds the `/ast:ast` skill to Claude Code
-- Adds the `/ast:setup` command for guided onboarding
+- Adds the `/ast:server` command, which signs you in and gets you a running server
 
 After installing, reload plugins to activate the new commands (no restart needed):
 
@@ -33,10 +33,10 @@ After installing, reload plugins to activate the new commands (no restart needed
 /reload-plugins
 ```
 
-Then run `/setup` to get started:
+Then run `/ast:server` to get started:
 
 ```
-/ast:setup
+/ast:server
 ```
 
 This will check if you're logged in, walk you through authentication (or registration), and help you create your first workspace and server.
@@ -115,6 +115,53 @@ cargo build --release
 cp target/release/ast ~/.local/bin/
 ```
 
+## Local kit (for ast setup)
+
+`ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.10.10`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
+
+```bash
+V=2026.10.10
+curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz"
+curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz.sha256"
+sha256sum -c "ast-local-kit-$V.tar.gz.sha256"    # macOS: shasum -a 256 -c "ast-local-kit-$V.tar.gz.sha256"
+mkdir -p <folder>/.ast/kit && tar -xzf "ast-local-kit-$V.tar.gz" -C <folder>/.ast/kit
+```
+
+`sha256sum -c` must print `ast-local-kit-2026.10.10.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
+
+## Set up a folder (ast setup)
+
+`ast setup` turns an empty folder into an Agent Studio workspace for Claude Code: the workspace's rules, skills, plugins, tool connections, services and secrets, under a key of its own. It needs your personal key (`AST_API_KEY`) or an `ast auth login`. The [local kit](#local-kit-for-ast-setup) is built into `ast`. Secrets go into `.env` and Claude Code's settings, except names starting with `ANTHROPIC_`, `CLAUDE_CODE_` or `OTEL_`, which stay in `.env` only.
+
+```bash
+ast setup                 # asks a few questions
+ast setup --yes --dir ~/w # asks nothing
+```
+
+Flags: `--dir`, `--org` and `--workspace` (id or exact name), `--kit`, `--yes`, `--only rules,skills,plugins,mcp,services,secrets,sources`, `--telemetry` / `--no-telemetry`, `--force` (moves what is in the way to `.ast/backup/`). Add `--env dev` for the dev platform. A folder holding only `.git/` counts as empty; re-running in a set-up folder replaces what setup wrote (secrets only when that run fetches them; otherwise the folder's stay if the organization and workspace are the same), keeps `.ast/setup.json`'s `installId`, makes a new 90-day folder key and removes the old one.
+
+A re-run keeps the folder's organization and workspace. The wizard lists them first, marked `(current)`, and asks before switching to another (default no), since a switch replaces the folder's secrets, rules, skills and connectors and removes the old folder key. With `--yes` and no `--org` or `--workspace`, the folder's own are used. Naming another with `--org` or `--workspace` switches without asking and prints `Switching this folder from workspace A to B.`; if such a run then fails, the JSON error carries `switched_from` (the earlier organization and workspace). When the folder's workspace is no longer one you can use, the wizard says so and asks for another; with `--yes` setup exits 8.
+
+Usage telemetry is on unless you pass `--no-telemetry` (or answer n in the wizard) or `AST_TELEMETRY_DISABLED` is `1` or `true` in the environment (an explicit `--telemetry` wins over the variable). Setup then creates a telemetry login with the folder's key, valid as long as the key, keeps it in `.env`, and writes `.ast/telemetry.json`. Start Claude Code with `.ast/kit/bin/ast-claude` and accept the folder trust prompt; plain `claude` and the VS Code extension send nothing. Only session and tool events are sent, never prompts or tool inputs. A re-run keeps the login while it has more than 7 days left and the organization and workspace are the same; with `--only` and no kit in the folder, telemetry is skipped. `--no-telemetry` revokes the login, removes `.ast/telemetry.json` and the token cache, and sends no `ast` usage events for that run. `AST_OTEL_AUTH_URL` sets the collector URL; with `AST_API_URL` set to another platform, telemetry is skipped unless it is set.
+
+`--yes` agrees to install Claude Code and uv if they are missing (git and Docker need admin rights: setup prints the steps and carries on). Outside the folder, setup changes only those programs, Docker images and Claude Code's plugin files (`~/.claude/plugins`).
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | done |
+| 1 | unexpected error (also: the wizard without a terminal and without `--yes`) |
+| 2 | no personal credential, or a workspace or organization key; also command-line usage errors |
+| 3 | the folder is not empty (and has no `.ast/setup.json`) |
+| 4 | platform unreachable or too old |
+| 5 | kit file missing or not the kit this `ast` pins |
+| 6 | one or more steps failed after the checks |
+| 7 | everything else done, but secrets were skipped |
+| 8 | organization or workspace not found, ambiguous with `--yes`, or (with `--yes`) the folder's own no longer usable |
+
+Exits 2 to 5 and 8 happen before anything is written. Every failed run is also reported as an error in the usage data.
+
+When a step fails at a terminal, setup says what failed, why and what to do in plain words (for a repo it could not copy: no GitHub login, no access, or GitHub not reachable), ends with `Setup finished with N problems: …` and the log's path, and prints no JSON error; the exit status is still 6. Piped, with `--format`, or with `AST_AGENT=1`, a failed step keeps the kit's own reason, the end of its output and the JSON error on stderr.
+
 ## Quick Start
 
 ### 1. Authenticate
@@ -125,7 +172,7 @@ Log in via browser (OAuth2 PKCE flow):
 ast auth login
 ```
 
-This opens your browser to the Keycloak login page, captures the auth token, and stores it securely in your OS keychain.
+At a terminal this prints a sign-in link that opens in any browser, on this or any other device (so it works on a server reached over SSH), and waits until you have signed in. Run by an agent (output not a terminal, `--format` given, or `AST_AGENT=1`), it prints the `[AUTH_URL]`/`[INSTANCE_ID]`/`[WAIT_TOKEN]`/`[ACTION]` labels for `ast auth callback` and exits.
 
 To target a specific environment:
 
@@ -195,6 +242,7 @@ AST_BEARER_TOKEN=<token>      # or AST_API_KEY — the injected credential
 AST_NO_DOTENV=1               # ignore any .env in/above the working directory
 AST_CONFIG_DIR=/scratch/ast   # config, token, and upload checkpoints go here, not $HOME
 AST_TELEMETRY_DISABLED=1      # no PostHog events, no ~2 s flush per invocation
+                              # (ast setup writes it to a folder's .env when telemetry is off)
 AST_ORGANIZATION_ID=<org>     # pin context explicitly
 AST_WORKSPACE_ID=<ws>         # pin context explicitly
 AST_CLIENT_NAME=<client>      # optional: the client you act for, sent as x-client-name

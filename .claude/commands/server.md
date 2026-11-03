@@ -1,8 +1,8 @@
 ---
-description: Set up the Eclipse Agent Studio CLI — checks authentication, guides login or registration, and gets the user into a running server.
+description: Get a running Eclipse Agent Studio server — checks authentication, guides login or registration, and gets the user into a running server.
 ---
 
-# Setup — Eclipse Agent Studio CLI
+# Server — Eclipse Agent Studio CLI
 
 Follow these steps in order. **The goal is to get the user a running server URL as fast as possible.**
 

@@ -10,7 +10,7 @@
     {
       "name": "ast",
       "description": "Eclipse Agent Studio CLI integration for Claude Code — OAuth login, registration, and platform authentication.",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "author": {
         "name": "Eclipse Space",
         "email": "support@eclipse.space"
