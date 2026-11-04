@@ -117,17 +117,17 @@ cp target/release/ast ~/.local/bin/
 
 ## Local kit (for ast setup)
 
-`ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.10.10`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
+`ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.11.1`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
 
 ```bash
-V=2026.10.10
+V=2026.11.1
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz"
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz.sha256"
 sha256sum -c "ast-local-kit-$V.tar.gz.sha256"    # macOS: shasum -a 256 -c "ast-local-kit-$V.tar.gz.sha256"
 mkdir -p <folder>/.ast/kit && tar -xzf "ast-local-kit-$V.tar.gz" -C <folder>/.ast/kit
 ```
 
-`sha256sum -c` must print `ast-local-kit-2026.10.10.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
+`sha256sum -c` must print `ast-local-kit-2026.11.1.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
 
 ## Set up a folder (ast setup)
 
