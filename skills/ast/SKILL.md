@@ -702,13 +702,15 @@ GPU support: add `--gpus all` to docker run. Mount source code for rapid iterati
 | Command | Required Options | Description |
 |---------|-----------------|-------------|
 | `auth login` | — | OAuth2 PKCE login (two-phase, see above) |
-| `auth logout` | — | Clear stored credentials |
+| `auth logout` | — | Clear stored credentials and revoke this machine's Git token |
 | `auth whoami` | — | Show current user info |
 | `auth register` | — | Register new account (two-phase, see above) |
 | `auth callback` | `--instance-id`, `--wait-token` | Complete two-phase auth (run in background) |
 | `auth status` | `--instance-id`, `--wait-token` | Non-blocking auth check (single request, returns immediately) |
 
 Options for `auth login`: `--interactive` (open browser directly).
+
+A completed sign-in (`login --interactive`, `callback` or `status`) also sets up Git for the platform's Git server: a token for this machine, served to Git by the hidden `auth git-credential` helper.
 
 ## organizations — Organization management
 
@@ -784,14 +786,18 @@ Notes:
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `services get` | — | `--organization-id`, `--workspace-id`, `--service-id`, `--limit` (50), `--cursor`, `--fields`, `--filters` |
-| `services create` | `--organization-id`, `--service-type-id`, `--name` | `--description`, `--instance`, `--tags` |
+| `services create` | `--organization-id`, `--name` | `--description`, `--instance`, `--tags`. On the Git flow it also clones the new repository into `./<name>` |
+| `services clone` | `<name-or-id>` | `--organization-id`, `--dir` (default `./<name>`). Creates `<user>-<machine>-develop` |
 | `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` (replace all), `--add-tag`, `--remove-tag` (repeatable; not with `--tags`), `--category <slug>`, `--clear-category` |
 | `services delete` | `--service-id` | — |
-| `services deploy` | `--service-id` unless the service file has a remote saved for the target `--env` (one remote per environment; a missing or ambiguous match is refused, never guessed) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--no-push`, `--no-poll` |
-| `services types` | — | — |
+| `services publish` (alias `deploy`) | In a Git copy: nothing (the folder's remote names the service). Old flow: `--service-id` unless the service file has a remote saved for the target `--env` (one remote per environment; a missing or ambiguous match is refused, never guessed) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--test-build` (alias `--no-push`; local build, no sign-in), `--no-poll`, `-m/--message` |
+| `services rollback` | `<version>`; `--service-id` outside the service's Git copy | `--noninteractive` (no confirmation), `--no-poll` |
+| `services publish-status` | `<job-id>` | — |
 | `services instance-types` | — | — |
 | `services add-to-workspace` | `--workspace-id` | `--service-ids` |
 | `services remove-from-workspace` | `--workspace-id` | `--service-ids` |
+
+**Git flow:** in a Git copy, `services publish` refuses uncommitted changes (commit them, or try them with `--test-build`), pushes your branch, publishes its last commit and follows the job; afterwards the branch starts again from the new main. A refusal is `{"error": "PUBLISH_REFUSED", "message": "CODE: what to do"}`; a failed build is `PUBLISH_FAILED` with the build log link. A network error or a gateway's 502/503/504 while following is tried again for about a minute; if the server stays out of reach the error is `PUBLISH_STILL_RUNNING`: the publish may still be running or may have finished, so follow it with the `ast services publish-status <job>` the message names. Organizations still on the old flow deploy the old way.
 
 **Service types:**
 - **Standard** — run on-demand, complete task, terminate. Good for batch processing and isolated jobs.
@@ -859,7 +865,7 @@ Notes:
   tool you are submitting), `results` (per tool: `glob` / `log_glob` / `report_glob` / `manifest` / `log_family`; a flat block in the file applies to every tool), `default_inputs` (keyed by tool). `preflight` is `dry_run` | `self_validating` | `none` (`no_solve` reads as `dry_run`). Field reference: `docs/process-yaml.md`.
 - The bindings are authored in `process.yaml` next to `service.yaml`, pointed
   at by a top-level `process:` key (`eclipse_process: 1`, see the README
-  "Processes" section). `services deploy` validates it against `service.tools`
+  "Processes" section). `services publish` validates it against `service.tools`
   and folds it into the service schema as `process`. A service without it is
   listed with `process: null`; an invalid document with `parse_error`; exit
   code stays 0.
@@ -910,7 +916,7 @@ MCP (Model Context Protocol) Configs connect additional MCP servers to extend ag
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `mcp-servers get` | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`) | `--organization-id`, `--workspace-id`, `--tag` (repeatable, all must match), `--category` (repeatable, any may match) |
-| `mcp-servers create` | `--scope-type` (`organization`\|`workspace`\|`user`), `--name`, `--config` (JSON) | `--organization-id`, `--workspace-id`, `--description`, `--enabled`, `--tag` (repeatable), `--category <slug>` |
+| `mcp-servers create` | `--scope-type` (`organization`\|`workspace`\|`user`), `--name`, `--config` (JSON) | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`, `--enabled`, `--tag` (repeatable), `--category <slug>` |
 | `mcp-servers edit` | `--mcp-server-id` | `--name`, `--description`, `--config`, `--enabled`, `--tag` (repeatable, replaces all), `--add-tag`, `--remove-tag` (repeatable; not with `--tag`), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped server's labels) |
 | `mcp-servers delete` | `--mcp-server-id` | — |
 | `mcp-servers overrides` | `--workspace-id` | — |
@@ -929,12 +935,18 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `skills get` | — | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`; defaults to `--scope-type`, else `aggregated` in a workspace), `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
-| `skills create` | `--scope-type`, `--name`, `--file` (.tar.gz) | `--organization-id`, `--workspace-id`, `--description`, `--version`, `--config`, `--enabled` |
-| `skills edit` | `--skill-id` | `--name`, `--description`, `--version`, `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
+| `skills create` | `--scope-type`, `--name`; `--file` (.tar.gz) on the old flow | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`; old flow only: `--version`, `--config`, `--enabled`. On the Git flow it clones the new skill into `./<name>` with a `SKILL.md` to commit |
+| `skills clone` | `<name-or-id>` | `--organization-id`, `--workspace-id`, `--dir` |
+| `skills publish` (alias `deploy`) | run in the skill's Git copy | `--path`, `-m/--message`, `--version` (`x.y.z`, or `patch`/`minor`/`major`; default: next patch), `--no-poll` |
+| `skills rollback` | `<version>`; `--skill-id` outside the skill's Git copy | `--noninteractive`, `--no-poll` |
+| `skills publish-status` | `<job-id>` | — |
+| `skills edit` | `--skill-id` | `--name`, `--description` (on the Git flow these publish a patch version), `--version`, `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
 | `skills delete` | `--skill-id` | — |
 | `skills replace-package` | `--skill-id`, `--file` | — |
 | `skills overrides` | `--workspace-id` | — |
 | `skills toggle-override` | `--workspace-id`, `--skill-id` | — |
+
+On the Git flow, `skills publish`, `skills rollback` and `skills edit` follow their publish job as `services publish` does: a lost connection is tried again, and `PUBLISH_STILL_RUNNING` means follow the job with `ast skills publish-status <job>`.
 
 ## tags, categories — Labels
 
@@ -952,6 +964,21 @@ Tags are free-form labels (the server normalizes them); categories are the organ
 | `web-apps list` (alias `get`) | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--status` (repeatable: pending, running, stopped, stale), `--text`, `--limit` (default 50) |
 
 The `url` of each app opens only in a browser signed in to Agent Studio; stale apps need their server started first.
+
+## base-images — Base images for services
+
+A base image is a Docker image the organization's services build on with their own `FROM` line. Use one when a service's `.devcontainer/Dockerfile` starts `FROM` an image that exists only on this machine (a large image built from an installer, say): the platform builds services in the cloud, so the publish fails with "pull access denied" until the image is published as a base.
+
+| Command | Required Options | Optional |
+|---------|-----------------|----------|
+| `base-images list` (alias `get`) | — | `--organization-id` |
+| `base-images push` | `--image <name>:<tag>` (a local image; lowercase name, no registry or `/`) | `--organization-id` |
+| `base-images pull` | `--image <name>:<tag>` | `--organization-id` |
+
+- Keep `FROM <name>:<tag>` in the Dockerfile unchanged, then publish the service. A `FROM` that names a base with no tag, or an unpublished tag, is refused `BASE_IMAGE_NOT_FOUND`.
+- **Tags are never overwritten.** `push` refuses a published tag before uploading anything. For a new version, `docker tag` the image with a new tag, push that, and change the `FROM` line.
+- `push` and `pull` run in the foreground until they finish, with Docker's progress on stderr; a large image can take an hour, so an agent runs them as a background task and checks its output.
+- Only members of the organization can list, push or pull its bases, and only where it publishes through Git.
 
 ## secrets — Secret management
 

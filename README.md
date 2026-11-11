@@ -206,6 +206,52 @@ ast workspaces get --organization-id <ORG_ID>
 ast auth logout
 ```
 
+## Publish with Git (version history)
+
+On an organization that has moved to version history, every service and skill
+is a Git repository on the platform's Git server, and you publish one commit of
+your own branch. One sign-in sets everything up:
+
+```bash
+ast auth login                        # also sets up Git for the platform's Git server
+ast services clone weather-service    # the published version, on your own branch
+git commit -am "Retry the fetch tool" # change files and commit, as in any repository
+ast services publish                  # refuses uncommitted changes; pushes; publishes
+ast services rollback 20              # publishes v20's files as a new version (asks first)
+ast services publish --test-build     # builds on this machine to test; never publishes
+```
+
+Skills work the same way: `ast skills clone`, `ast skills publish` (`--version`
+to choose the version, or `patch`, `minor` or `major` to bump it, else the next patch), `ast skills rollback`.
+The old name `deploy` still works for both, with the same flags.
+`ast skills create` and `ast services create` make the repository and clone it
+into `./<name>`; `ast skills edit --name/--description` publishes a patch
+version.
+
+- **Your branch** is `<user>-<machine>-develop`. Publish pushes it, publishes its
+  last commit and follows the publish job (`-m` sets the version message;
+  `--no-poll` returns at once, and `ast services publish-status <job>` follows
+  it later). If someone published since you started, the platform refuses and
+  says what to do.
+- **After a publish** (`publish`, `publish-status` or rollback) your branch starts
+  again from the new main, keeping only the commits made after the published
+  one, so a rollback stays rolled back; uncommitted files stay. If Git refuses,
+  it says which command to run. `clone` starts from main when your branch on
+  the server holds nothing unpublished.
+- **The Git login** is a token for this machine, kept in `~/.ast/gitea.json`
+  (mode 0600). Git gets it from `ast auth git-credential`, which is set as the
+  credential helper for the Git server only and renews the token before it
+  expires. It never appears in a remote, `.git/config` or a log.
+  `ast auth logout` revokes it.
+- **Service settings** — name, description and instance — are edited with
+  `ast services edit`; publish no longer reads them from `service.yaml` or
+  writes `remotes:` into it.
+
+Organizations not yet on version history publish exactly as before
+(`ast services publish` builds and pushes the image; skills use
+`ast skills create --file` and `ast skills replace-package`), except that
+`--test-build` (old name `--no-push`) no longer signs in or syncs settings.
+
 ## Authentication Methods
 
 The CLI supports multiple auth methods, resolved in this priority order:
@@ -276,10 +322,16 @@ These behaviors are pinned by the `tests/server_mode.rs` and
 ## Commands
 
 ```
-ast auth login       Log in via browser (OAuth2 PKCE)
-ast auth logout      Clear stored credentials
+ast auth login       Log in via browser (OAuth2 PKCE); also sets up Git
+ast auth logout      Clear stored credentials and revoke this machine's Git token
+ast services clone   Clone a service and create your own branch (also skills clone)
+ast services publish  Publish your branch's last commit (also skills publish)
+ast services rollback  Publish an earlier version's files as a new version
 ast auth whoami      Show current user info
 ast workspaces get   List workspaces
+ast base-images list List the organization's base images and their tags
+ast base-images push Publish a local Docker image as a base image (--image name:tag)
+ast base-images pull Copy a published base image into this machine's Docker
 ast secrets get      List secrets (metadata only)
 ast secrets create   Create a secret
 ast secrets edit     Change a secret's value or workspace exposure
@@ -295,9 +347,27 @@ ast refresh --check  Report drift without writing (exit 3 when drift is found)
 
 Further command groups: `organizations`, `members`, `volumes`, `volume-data`,
 `services`, `service-jobs`, `persistent-services`, `processes`, `skills`,
-`servers`, `mcp-servers`, `api-keys`, `tags`, `categories`, `web-apps`, `preauth`, `refresh`,
+`servers`, `mcp-servers`, `api-keys`, `base-images`, `tags`, `categories`, `web-apps`, `preauth`, `refresh`,
 `rules`, `schema`.
 Run `ast <group> --help` for details.
+
+## Base Images
+
+A base image is a Docker image an organization's services build on with their
+own `FROM` line, for an image that exists only on one machine (one built from a
+large installer, say): the platform builds services in the cloud and can't pull
+it. Members of the organization only, on organizations that publish through Git.
+
+```bash
+ast base-images push --image ansys-edt-base:2025r2   # refused if the tag is published or the image isn't local
+ast base-images list --format table
+ast base-images pull --image ansys-edt-base:2025r2   # tags it ansys-edt-base:2025r2 locally
+```
+
+A service then keeps `FROM ansys-edt-base:2025r2` in `.devcontainer/Dockerfile`.
+Tags are never overwritten: a new version of a base is a new tag. Push and pull
+run until they finish, with Docker's progress on stderr, and log in with a
+temporary Docker config that is removed afterwards, never your own.
 
 ## Volume Data
 
@@ -354,8 +424,8 @@ Claude Code plugins, from a supported marketplace (`claude-plugins-official`,
 catalogue only until attached to a workspace.
 
 ```bash
-ast plugins add --name commit-commands --organization-id <ORG_ID>    # = commit-commands@claude-plugins-official
-ast plugins upload --file ./my-plugin --organization-id <ORG_ID>
+ast plugins add --name commit-commands                               # = commit-commands@claude-plugins-official
+ast plugins upload --file ./my-plugin                                # organization: --organization-id, else the one set with `ast orgs use`
 ast plugins get --mode organization --organization-id <ORG_ID>       # the whole catalogue, attached or not
 ast plugins get --workspace-id <WS_ID>                               # aggregated: what the workspace runs
 ast plugins edit --plugin-id <PLUGIN_ID> --enabled true              # or --description "..." ("" clears)
@@ -448,7 +518,7 @@ The full field reference is [`docs/process-yaml.md`](docs/process-yaml.md); the
 machine-readable copy is [`schemas/process.schema.json`](schemas/process.schema.json)
 (kept in step with the parser by a unit test).
 
-`ast services deploy` validates the file before any network or Docker work —
+`ast services publish` validates the file before any network or Docker work —
 it must be a well-formed document, and every tool it names (in
 `extension_hints`, the per-tool maps, `results`, and `default_inputs`) must exist under
 `service.tools`, with every default naming a declared input — and then folds
@@ -487,8 +557,8 @@ them. Per record:
 - A service without a `process` key is listed with `process: null`; a
   document that fails validation is listed with `parse_error`. The command
   exits 0 in both cases — a missing or broken convention is visible, never
-  silent. Deploy refuses an invalid file, so `parse_error` only appears on a
-  record written outside `ast services deploy`. A `process:` on a service
+  silent. Publish refuses an invalid file, so `parse_error` only appears on a
+  record written outside `ast services publish`. A `process:` on a service
   with no `tools` is refused too: schema consumers read `tools`, and without
   it they would take `process` for a tool.
 
