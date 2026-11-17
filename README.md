@@ -117,17 +117,17 @@ cp target/release/ast ~/.local/bin/
 
 ## Local kit (for ast setup)
 
-`ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.11.1`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
+`ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.11.2`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
 
 ```bash
-V=2026.11.1
+V=2026.11.2
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz"
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz.sha256"
 sha256sum -c "ast-local-kit-$V.tar.gz.sha256"    # macOS: shasum -a 256 -c "ast-local-kit-$V.tar.gz.sha256"
 mkdir -p <folder>/.ast/kit && tar -xzf "ast-local-kit-$V.tar.gz" -C <folder>/.ast/kit
 ```
 
-`sha256sum -c` must print `ast-local-kit-2026.11.1.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
+`sha256sum -c` must print `ast-local-kit-2026.11.2.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
 
 ## Set up a folder (ast setup)
 
@@ -138,13 +138,21 @@ ast setup                 # asks a few questions
 ast setup --yes --dir ~/w # asks nothing
 ```
 
+To refresh a folder after the workspace changed, run `ast setup --yes --dir <folder>` again; it keeps the folder's organization and workspace. A folder does not follow the workspace by itself. (`ast refresh` is for Agent Studio servers, not folders.)
+
+With no questions and a personal key (a workspace key is refused, exit 2). If you belong to more than one organization, `--yes` exits 8 unless you also pass `--org`, because the organization is chosen before `--workspace` is looked up:
+
+```bash
+AST_API_KEY=<your personal key> ast setup --yes --dir ~/w --org "<organization>" --workspace "<name>"
+```
+
 Flags: `--dir`, `--org` and `--workspace` (id or exact name), `--kit`, `--yes`, `--only rules,skills,plugins,mcp,services,secrets,sources`, `--telemetry` / `--no-telemetry`, `--force` (moves what is in the way to `.ast/backup/`). Add `--env dev` for the dev platform. A folder holding only `.git/` counts as empty; re-running in a set-up folder replaces what setup wrote (secrets only when that run fetches them; otherwise the folder's stay if the organization and workspace are the same), keeps `.ast/setup.json`'s `installId`, makes a new 90-day folder key and removes the old one.
 
 A re-run keeps the folder's organization and workspace. The wizard lists them first, marked `(current)`, and asks before switching to another (default no), since a switch replaces the folder's secrets, rules, skills and connectors and removes the old folder key. With `--yes` and no `--org` or `--workspace`, the folder's own are used. Naming another with `--org` or `--workspace` switches without asking and prints `Switching this folder from workspace A to B.`; if such a run then fails, the JSON error carries `switched_from` (the earlier organization and workspace). When the folder's workspace is no longer one you can use, the wizard says so and asks for another; with `--yes` setup exits 8.
 
-Usage telemetry is on unless you pass `--no-telemetry` (or answer n in the wizard) or `AST_TELEMETRY_DISABLED` is `1` or `true` in the environment (an explicit `--telemetry` wins over the variable). Setup then creates a telemetry login with the folder's key, valid as long as the key, keeps it in `.env`, and writes `.ast/telemetry.json`. Start Claude Code with `.ast/kit/bin/ast-claude` and accept the folder trust prompt; plain `claude` and the VS Code extension send nothing. Only session and tool events are sent, never prompts or tool inputs. A re-run keeps the login while it has more than 7 days left and the organization and workspace are the same; with `--only` and no kit in the folder, telemetry is skipped. `--no-telemetry` revokes the login, removes `.ast/telemetry.json` and the token cache, and sends no `ast` usage events for that run. `AST_OTEL_AUTH_URL` sets the collector URL; with `AST_API_URL` set to another platform, telemetry is skipped unless it is set.
+Usage telemetry is on unless you pass `--no-telemetry` (or answer n in the wizard) or `AST_TELEMETRY_DISABLED` is `1` or `true` in the environment (an explicit `--telemetry` wins over the variable). Setup then creates a telemetry login with the folder's key, valid as long as the key, keeps it in `.env`, and writes `.ast/telemetry.json`. Start Claude Code with `.ast/kit/bin/ast-claude` and accept the folder trust prompt; plain `claude` and the VS Code extension send nothing. Only session and tool events are sent, never prompts or tool inputs. A re-run keeps the login while it has more than 7 days left and the organization and workspace are the same; with `--only secrets` and no kit in the folder, telemetry is skipped. `--no-telemetry` revokes the login, removes `.ast/telemetry.json` and the token cache, and sends no `ast` usage events for that run. `AST_OTEL_AUTH_URL` sets the collector URL; with `AST_API_URL` set to another platform, telemetry is skipped unless it is set.
 
-`--yes` agrees to install Claude Code and uv if they are missing (git and Docker need admin rights: setup prints the steps and carries on). Outside the folder, setup changes only those programs, Docker images and Claude Code's plugin files (`~/.claude/plugins`).
+`--yes` agrees to install Claude Code and uv if they are missing (git and Docker need admin rights: setup prints the steps and carries on). When the folder is not already inside a git repo, setup also runs `git init` there, so Claude Code started in a subfolder still uses the folder's settings. When the folder is inside another repo, setup leaves that repo alone and says so: start Claude Code in the folder itself, or from a subfolder with `.ast/kit/bin/ast-claude`, which passes the folder's settings itself. Outside the folder, setup changes only those programs, Docker images and Claude Code's plugin files (`~/.claude/plugins`).
 
 | Exit | Meaning |
 | --- | --- |
@@ -159,6 +167,8 @@ Usage telemetry is on unless you pass `--no-telemetry` (or answer n in the wizar
 | 8 | organization or workspace not found, ambiguous with `--yes`, or (with `--yes`) the folder's own no longer usable |
 
 Exits 2 to 5 and 8 happen before anything is written. Every failed run is also reported as an error in the usage data.
+
+The end-to-end proof on fresh dev machines is `scripts/proof/ast-setup-dev-vm.sh` in the private source repo (ast-cli-src); it needs the dev AWS profile.
 
 When a step fails at a terminal, setup says what failed, why and what to do in plain words (for a repo it could not copy: no GitHub login, no access, or GitHub not reachable), ends with `Setup finished with N problems: …` and the log's path, and prints no JSON error; the exit status is still 6. Piped, with `--format`, or with `AST_AGENT=1`, a failed step keeps the kit's own reason, the end of its output and the JSON error on stderr.
 
