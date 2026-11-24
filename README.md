@@ -235,10 +235,13 @@ Skills work the same way: `ast skills clone`, `ast skills publish` (`--version`
 to choose the version, or `patch`, `minor` or `major` to bump it, else the next patch), `ast skills rollback`.
 The old name `deploy` still works for both, with the same flags.
 `ast skills create` and `ast services create` make the repository and clone it
-into `./<name>`; `ast skills edit --name/--description` publishes a patch
+into `./<name>`. If the clone fails, the error still gives the new id and how to
+finish: `ast services clone <id>`, or the same `ast skills create` again, which
+reopens the skill. `ast skills edit --name/--description` publishes a patch
 version.
 
-- **Your branch** is `<user>-<machine>-develop`. Publish pushes it, publishes its
+- **Your branch** is `<user>-<machine>-develop` (on an editor, for the editor's
+  own platform, the editor's branch `editor-<editor id>-develop`). Publish pushes it, publishes its
   last commit and follows the publish job (`-m` sets the version message;
   `--no-poll` returns at once, and `ast services publish-status <job>` follows
   it later). If someone published since you started, the platform refuses and
@@ -248,11 +251,18 @@ version.
   one, so a rollback stays rolled back; uncommitted files stay. If Git refuses,
   it says which command to run. `clone` starts from main when your branch on
   the server holds nothing unpublished.
-- **The Git login** is a token for this machine, kept in `~/.ast/gitea.json`
-  (mode 0600). Git gets it from `ast auth git-credential`, which is set as the
-  credential helper for the Git server only and renews the token before it
-  expires. It never appears in a remote, `.git/config` or a log.
-  `ast auth logout` revokes it.
+- **The Git login** is a token for this machine, one per platform, kept in
+  `~/.ast/gitea.json` (mode 0600). A Git command uses the login of the platform
+  it targets (`--env`, `AST_ENVIRONMENT`, `AST_MANAGER_URL`), sets one up from
+  your sign-in to that platform when there is none, and never uses another
+  platform's. Git gets it from `ast auth git-credential`, which is set as the
+  credential helper for each platform's Git server only and renews the token
+  before it expires. It never appears in a remote, `.git/config` or a log.
+  `ast auth logout` revokes the tokens and forgets them all. A `gitea.json`
+  from an older ast, which held one login, is read as that platform's login.
+- **On an editor**, Git commands for the editor's own platform use the editor's
+  Git login (its owner's), which the editor keeps up; ast stores nothing for
+  it and leaves Git config alone. Other platforms use their own logins.
 - **Service settings** — name, description and instance — are edited with
   `ast services edit`; publish no longer reads them from `service.yaml` or
   writes `remotes:` into it.
@@ -333,7 +343,7 @@ These behaviors are pinned by the `tests/server_mode.rs` and
 
 ```
 ast auth login       Log in via browser (OAuth2 PKCE); also sets up Git
-ast auth logout      Clear stored credentials and revoke this machine's Git token
+ast auth logout      Clear stored credentials and revoke this machine's Git tokens
 ast services clone   Clone a service and create your own branch (also skills clone)
 ast services publish  Publish your branch's last commit (also skills publish)
 ast services rollback  Publish an earlier version's files as a new version

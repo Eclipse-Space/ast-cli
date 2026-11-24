@@ -702,7 +702,7 @@ GPU support: add `--gpus all` to docker run. Mount source code for rapid iterati
 | Command | Required Options | Description |
 |---------|-----------------|-------------|
 | `auth login` | — | OAuth2 PKCE login (two-phase, see above) |
-| `auth logout` | — | Clear stored credentials and revoke this machine's Git token |
+| `auth logout` | — | Clear stored credentials and revoke this machine's Git tokens (every platform) |
 | `auth whoami` | — | Show current user info |
 | `auth register` | — | Register new account (two-phase, see above) |
 | `auth callback` | `--instance-id`, `--wait-token` | Complete two-phase auth (run in background) |
@@ -710,7 +710,7 @@ GPU support: add `--gpus all` to docker run. Mount source code for rapid iterati
 
 Options for `auth login`: `--interactive` (open browser directly).
 
-A completed sign-in (`login --interactive`, `callback` or `status`) also sets up Git for the platform's Git server: a token for this machine, served to Git by the hidden `auth git-credential` helper.
+A completed sign-in (`login --interactive`, `callback` or `status`) also sets up Git for that platform's Git server: a token for this machine and platform, served to Git by the hidden `auth git-credential` helper. Each platform keeps its own Git login, and a Git command (`clone`, `publish`) uses the one of the platform it targets; with none and no sign-in to that platform it fails with `AUTH_REQUIRED` and names the `ast auth login --env …` to run. On an editor, its own platform's Git commands use the editor's Git login, with no sign-in needed.
 
 ## organizations — Organization management
 
@@ -786,7 +786,7 @@ Notes:
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `services get` | — | `--organization-id`, `--workspace-id`, `--service-id`, `--limit` (50), `--cursor`, `--fields`, `--filters` |
-| `services create` | `--organization-id`, `--name` | `--description`, `--instance`, `--tags`. On the Git flow it also clones the new repository into `./<name>` |
+| `services create` | `--organization-id`, `--name` | `--description`, `--instance`, `--tags`. On the Git flow it also clones the new repository into `./<name>`; if that clone fails, the JSON error's `data` and `hint` give the new id (`ast services clone <id>` finishes it) |
 | `services clone` | `<name-or-id>` | `--organization-id`, `--dir` (default `./<name>`). Creates `<user>-<machine>-develop` |
 | `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` (replace all), `--add-tag`, `--remove-tag` (repeatable; not with `--tags`), `--category <slug>`, `--clear-category` |
 | `services delete` | `--service-id` | — |
@@ -935,10 +935,10 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `skills get` | — | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`; defaults to `--scope-type`, else `aggregated` in a workspace), `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
-| `skills create` | `--scope-type`, `--name`; `--file` (.tar.gz) on the old flow | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`; old flow only: `--version`, `--config`, `--enabled`. On the Git flow it clones the new skill into `./<name>` with a `SKILL.md` to commit |
+| `skills create` | `--scope-type`, `--name`; `--file` (.tar.gz) on the old flow | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`; old flow only: `--version`, `--config`, `--enabled`. On the Git flow it clones the new skill into `./<name>` with a `SKILL.md` to commit; if that clone fails, the JSON error's `data` and `hint` give the new id (the same create again reopens and clones it) |
 | `skills clone` | `<name-or-id>` | `--organization-id`, `--workspace-id`, `--dir` |
 | `skills publish` (alias `deploy`) | run in the skill's Git copy | `--path`, `-m/--message`, `--version` (`x.y.z`, or `patch`/`minor`/`major`; default: next patch), `--no-poll` |
-| `skills rollback` | `<version>`; `--skill-id` outside the skill's Git copy | `--noninteractive`, `--no-poll` |
+| `skills rollback` | `<version>`; `--skill-id` outside the skill's Git copy | `--workspace-id` (env `AST_WORKSPACE_ID`; a workspace skill), `--noninteractive` (no confirmation), `--no-poll` |
 | `skills publish-status` | `<job-id>` | — |
 | `skills edit` | `--skill-id` | `--name`, `--description` (on the Git flow these publish a patch version), `--version`, `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
 | `skills delete` | `--skill-id` | — |
