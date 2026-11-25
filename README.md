@@ -120,14 +120,14 @@ cp target/release/ast ~/.local/bin/
 `ast setup` works from a local kit: a tarball of the launchers and tool-server code it needs. `ast` has it built in, so setup needs no download; `--kit <file>` uses a file instead. The current kit is version `2026.11.3`. It is attached to every `ast` release from that version on, next to the binaries, together with a `.sha256` file. You need only [uv](https://docs.astral.sh/uv/) on the machine; the kit brings the rest.
 
 ```bash
-V=2026.11.3
+V=2026.11.4
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz"
 curl -fLO "https://github.com/Eclipse-Space/ast-cli/releases/latest/download/ast-local-kit-$V.tar.gz.sha256"
 sha256sum -c "ast-local-kit-$V.tar.gz.sha256"    # macOS: shasum -a 256 -c "ast-local-kit-$V.tar.gz.sha256"
 mkdir -p <folder>/.ast/kit && tar -xzf "ast-local-kit-$V.tar.gz" -C <folder>/.ast/kit
 ```
 
-`sha256sum -c` must print `ast-local-kit-2026.11.3.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
+`sha256sum -c` must print `ast-local-kit-2026.11.4.tar.gz: OK` before you unpack. `releases/latest` resolves only once a non-prerelease release carries the kit; to fetch it from a prerelease, replace `releases/latest/download` with `releases/download/<tag>`.
 
 ## Set up a folder (ast setup)
 
@@ -218,9 +218,8 @@ ast auth logout
 
 ## Publish with Git (version history)
 
-On an organization that has moved to version history, every service and skill
-is a Git repository on the platform's Git server, and you publish one commit of
-your own branch. One sign-in sets everything up:
+Every service and skill is a Git repository on the platform's Git server, and
+you publish one commit of your own branch. One sign-in sets everything up:
 
 ```bash
 ast auth login                        # also sets up Git for the platform's Git server
@@ -267,10 +266,7 @@ version.
   `ast services edit`; publish no longer reads them from `service.yaml` or
   writes `remotes:` into it.
 
-Organizations not yet on version history publish exactly as before
-(`ast services publish` builds and pushes the image; skills use
-`ast skills create --file` and `ast skills replace-package`), except that
-`--test-build` (old name `--no-push`) no longer signs in or syncs settings.
+`--test-build` (old name `--no-push`) needs no sign-in.
 
 ## Authentication Methods
 
@@ -357,8 +353,8 @@ ast secrets create   Create a secret
 ast secrets edit     Change a secret's value or workspace exposure
 ast secrets delete   Delete a secret
 ast rules get-*      Show platform/organization/workspace/service/user rules
-ast rules edit-*     Replace organization/workspace/service/user rules
-ast processes get    Process discovery index (which service, volume and workspace run each process)
+ast rules edit-*     Replace organization/workspace/user rules
+ast processes get    Persistent-service index (ids, status, default volume, tools and job markers)
 ast preauth status   Show per-name pre-auth enrollment status (on a server)
 ast preauth seed     Store this server's gh, Claude and Codex logins on the platform
 ast refresh          Re-sync skills, rules, MCP config and secrets (on a server)
@@ -433,7 +429,7 @@ MCP gateway's `load_skill`):
 - The `s3Url` field on `getSkills` is an `s3://` storage locator and **cannot
   be fetched directly** — always go through `getSkillDownload`.
 - The archive is a **zip** with `SKILL.md` at the root (the Agent Skills
-  package layout used by `skills create`/`replace-package`).
+  package layout).
 
 ## Plugins
 
@@ -485,123 +481,42 @@ ast persistent-services jobs cancel --ps-job-id <PS_JOB_ID>
 
 ## Processes
 
-`ast processes get` builds the **process discovery index**: for every
-persistent service in the organization, which process it runs, on which store
-volume and jobs workspace, with which tools. It is what the job-runner skill
-reads on editors and in Claude Code, and what the gateway serves Claude
-Desktop through `run_ast(["processes", "get", "--organization-id", …])` — so
-environment-specific ids are never stored in a skill package or a gateway
-table; every surface reads the current environment's ids at run time.
+`ast processes get` lists the organization's persistent services from their
+records, one row each: ids, status, description, server type, workspace,
+default volume, tool names and each tool's job markers. A job marker is an
+input's `format:` in the service schema: `file-path` marks a file input and
+`output-dir` marks the output folder. The command reports marks only; it does
+not guess an unmarked output folder. It is what the gateway serves Claude
+Desktop through `run_ast(["processes", "get", "--organization-id", …])`, so
+environment-specific ids are never stored in a skill package.
 
 ```bash
-# The index. Organization-scoped: --organization-id, else AST_ORGANIZATION_ID,
-# else the configured organization (`ast orgs use`). --workspace-id only
-# narrows — it is deliberately not read from AST_WORKSPACE_ID.
-ast processes get --organization-id <ORG_ID>
-
-# Filters (exact; --extension is case-insensitive, leading dot optional)
-ast processes get --extension .aedt
-ast processes get --domain fab --process fab-package
+ast processes get --organization-id <ORG_ID>              # JSON
 ast processes get --name fab-package-automation --format table
+ast processes get --workspace-id <WS_ID>                  # narrow to one workspace
 ```
 
-The bindings are authored in a `process.yaml` next to `service.yaml`, pointed
-at by a top-level `process:` key — the sibling of `rules:`:
-
-```yaml
-# service.yaml
-rules: README.md        # the agent-facing process document
-process: process.yaml   # the discovery block this verb reads
-```
-
-```yaml
-# process.yaml
-eclipse_process: 1                 # convention version (required, must be 1)
-process: fab-package               # process family (required)
-domain: fab                        # eclipse.job/1 descriptor the job rides (required)
-label: PCB fab package (validate a _FAB.zip / assemble from parts)
-volume_name: PCB/PCBA Automation Workspace Volume   # store volume, exact name (required)
-workspace_name: PCB/PCBA Automation                 # jobs workspace, exact name (required)
-runtime_class: minutes             # seconds | minutes | hours — for every tool, or a per-tool map
-preflight: self_validating         # dry_run | self_validating | none — likewise (`no_solve` = dry_run)
-extension_hints:                   # input extension -> tools on THIS service
-  .zip: [validate]
-  .xlsx: [assemble]
-  .tgz: [assemble]
-results:                           # for every tool, or a per-tool map of these keys
-  report_glob: "results/*_report.json"
-default_inputs:                    # keyed by tool, never flat
-  validate: {formats: "md,json"}
-```
-
-The full field reference is [`docs/process-yaml.md`](docs/process-yaml.md); the
-machine-readable copy is [`schemas/process.schema.json`](schemas/process.schema.json)
-(kept in step with the parser by a unit test).
-
-`ast services publish` validates the file before any network or Docker work —
-it must be a well-formed document, and every tool it names (in
-`extension_hints`, the per-tool maps, `results`, and `default_inputs`) must exist under
-`service.tools`, with every default naming a declared input — and then folds
-it into the service schema as its `process` key. The platform snapshots that
-schema onto the persistent-service record as `serviceSchema`, next to the
-`rules:` document, and a persistent-service update (`upgradeToLatestVersion`)
-refreshes both. The file carries no ids: the persistent-service and service
-ids come from the record, and the names resolve in whichever environment reads
-them. Per record:
-
-- `workspace_name` resolves to `workspace_id` by **exact** name within the
-  organization. `volume_name` resolves against the organization's volumes
-  **plus the volumes attached to that workspace** — a workspace's own volume
-  (`<workspace> Workspace Volume`) is not in the organization-scoped listing.
-  A name neither has is looked up once more among every volume the caller can
-  list in the organization (the `ast volumes get` listing, which keeps
-  workspace volumes — including one whose workspace was deleted).
-  Zero or several matches emit `volume_resolution` / `workspace_resolution`
-  (`not_found` | `ambiguous`, with the candidates) and a `null` id — the verb
-  never guesses.
-- `runtime_class` and `preflight` are always emitted as **per-tool maps**. A
-  scalar in the file applies to every tool and is expanded over the schema's
-  tools; a map names tools explicitly (a multi-stage service: prep in
-  minutes, the solve in hours). `default_inputs` is keyed by tool
-  (`{validate: {formats: "md,json"}}`); a flat mapping is rejected.
-- `results` normalizes the same way: a flat block of result keys (`glob`,
-  `log_glob`, `report_glob`, `manifest`, `log_family`) applies to every tool,
-  a per-tool map names tools, and the output is always tool -> keys. A block
-  that mixes result keys with tool names is refused. `preflight` values are
-  `dry_run` (a separate cheap check exists), `self_validating` (the run fails
-  fast on bad inputs), `none`; `no_solve`, the Ansys flag name the first
-  drafts used, is read as `dry_run`.
-- `tools` comes from the schema's `tools` key, not the process document, so
-  the two cannot drift. `extension_hints` keys are normalized to lowercase
-  with a leading dot.
-- A service without a `process` key is listed with `process: null`; a
-  document that fails validation is listed with `parse_error`. The command
-  exits 0 in both cases — a missing or broken convention is visible, never
-  silent. Publish refuses an invalid file, so `parse_error` only appears on a
-  record written outside `ast services publish`. A `process:` on a service
-  with no `tools` is refused too: schema consumers read `tools`, and without
-  it they would take `process` for a tool.
+`--organization-id` defaults to `AST_ORGANIZATION_ID`, then the configured
+organization (the gateway requires it). `--workspace-id` only narrows and is not
+read from `AST_WORKSPACE_ID`. `--name` is an exact match. A row looks like:
 
 ```json
 {"getProcesses": [{
-  "process": "fab-package",
   "service_name": "fab-package-automation",
-  "persistent_service_id": "ps-…", "service_id": "…", "service_status": "stopped",
-  "tools": ["assemble", "validate"],
-  "domain": "fab", "label": "…",
-  "volume_name": "…", "volume_id": "…",
-  "workspace_name": "…", "workspace_id": null,
-  "workspace_resolution": {"error": "not_found", "message": "…", "candidates": []},
-  "extension_hints": {".zip": ["validate"], ".xlsx": ["assemble"], ".tgz": ["assemble"]},
-  "runtime_class": {"assemble": "minutes", "validate": "minutes"},
-  "preflight": {"assemble": "self_validating", "validate": "self_validating"},
-  "results": {"assemble": {"report_glob": "results/*_report.json"}, "validate": {"report_glob": "results/*_report.json"}},
-  "default_inputs": {"validate": {"formats": "md,json"}}
+  "persistent_service_id": "ps-…", "service_id": "…", "service_status": "RUNNING",
+  "description": "…", "instance_type": "t3.large",
+  "tools": ["ping", "validate"],
+  "job_markers": {
+    "ping": {"file_inputs": [], "output_dir": null},
+    "validate": {"file_inputs": ["fab_zip"], "output_dir": "output_dir"}
+  },
+  "volume_id": "…", "workspace_id": "…"
 }]}
 ```
 
-Read-only, no presigned URLs, no local filesystem, no env-backed values in the
-output — the posture the gateway's `run_ast` allow-list requires.
+`description` and `volume_id` are `null` when unset. Read-only, no presigned
+URLs, no local filesystem, no env-backed values in the output — the posture the
+gateway's `run_ast` allow-list requires.
 
 ## Secrets
 

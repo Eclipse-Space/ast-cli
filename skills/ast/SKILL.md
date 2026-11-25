@@ -656,10 +656,10 @@ $CLI service-jobs get --workspace-id <WS_ID> --format table
 ## Run a Persistent-Service Job (e.g. a solver)
 
 ```bash
-# Which process runs where — persistent service, store volume, jobs workspace,
-# tools — with this environment's ids (never copy ids from a document)
+# Which persistent service runs what — ids, default volume, workspace, tools and
+# each tool's job markers — with this environment's ids (never copy ids from a document)
 $CLI processes get --organization-id <ORG_ID>
-$CLI processes get --extension .aedt   # by input file type
+$CLI processes get --name <SERVICE_NAME>   # one service
 
 # Discover the service and its tools
 $CLI persistent-services get --workspace-id <WS_ID> --format table
@@ -685,11 +685,11 @@ $CLI persistent-services jobs status --ps-job-id <PS_JOB_ID> --workspace-id <WS_
 Services are developed **on servers** inside the IDE:
 
 1. **Scaffold** — Use templates from `~/.agent-studio/templates` or ask the agent
-2. **Configure** — Edit `service.yaml` (name, description, tools, inputs, outputs; optional top-level `rules:` for the agent-facing document and `process:` for the `process.yaml` discovery block that `processes get` reads)
+2. **Configure** — Edit `service.yaml` (tools, inputs, outputs; optional top-level `rules:` for the agent-facing document; mark a tool's file inputs `format: file-path` and its output folder `format: output-dir`). The service's name and description are settings: change them with `ast services edit`
 3. **Implement** — Write tool handlers, `entrypoint.py`, Dockerfile
 4. **Build** — `docker build -t my-service -f .devcontainer/Dockerfile .`
 5. **Test locally** — `docker run -e payload='{"tool":"...","inputs":{...}}' -v /workspace:/workspace -u $(id -u):$(id -g) my-service`
-6. **Deploy** — Via agent deploy tool or `anadeploy` CLI
+6. **Publish** — Commit in the service's Git copy and run `ast services publish` (or the editor's publish tool)
 
 GPU support: add `--gpus all` to docker run. Mount source code for rapid iteration without full rebuilds.
 
@@ -786,18 +786,18 @@ Notes:
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `services get` | — | `--organization-id`, `--workspace-id`, `--service-id`, `--limit` (50), `--cursor`, `--fields`, `--filters` |
-| `services create` | `--organization-id`, `--name` | `--description`, `--instance`, `--tags`. On the Git flow it also clones the new repository into `./<name>`; if that clone fails, the JSON error's `data` and `hint` give the new id (`ast services clone <id>` finishes it) |
+| `services create` | `--organization-id`, `--name` | `--description`, `--instance`, `--tags`. Also clones the new repository into `./<name>`; if that clone fails, the JSON error's `data` and `hint` give the new id (`ast services clone <id>` finishes it) |
 | `services clone` | `<name-or-id>` | `--organization-id`, `--dir` (default `./<name>`). Creates `<user>-<machine>-develop` |
 | `services edit` | `--service-id` | `--name`, `--description`, `--instance`, `--tags` (replace all), `--add-tag`, `--remove-tag` (repeatable; not with `--tags`), `--category <slug>`, `--clear-category` |
 | `services delete` | `--service-id` | — |
-| `services publish` (alias `deploy`) | In a Git copy: nothing (the folder's remote names the service). Old flow: `--service-id` unless the service file has a remote saved for the target `--env` (one remote per environment; a missing or ambiguous match is refused, never guessed) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--test-build` (alias `--no-push`; local build, no sign-in), `--no-poll`, `-m/--message` |
+| `services publish` (alias `deploy`) | run in the service's Git copy (the folder's remote names the service; elsewhere it is refused with `NOT_A_GIT_COPY`) | `--service`, `--path`, `--dockerfile`, `--noninteractive`, `--log-file`, `--test-build` (alias `--no-push`; local build, no sign-in), `--no-poll`, `-m/--message` |
 | `services rollback` | `<version>`; `--service-id` outside the service's Git copy | `--noninteractive` (no confirmation), `--no-poll` |
 | `services publish-status` | `<job-id>` | — |
 | `services instance-types` | — | — |
 | `services add-to-workspace` | `--workspace-id` | `--service-ids` |
 | `services remove-from-workspace` | `--workspace-id` | `--service-ids` |
 
-**Git flow:** in a Git copy, `services publish` refuses uncommitted changes (commit them, or try them with `--test-build`), pushes your branch, publishes its last commit and follows the job; afterwards the branch starts again from the new main. A refusal is `{"error": "PUBLISH_REFUSED", "message": "CODE: what to do"}`; a failed build is `PUBLISH_FAILED` with the build log link. A network error or a gateway's 502/503/504 while following is tried again for about a minute; if the server stays out of reach the error is `PUBLISH_STILL_RUNNING`: the publish may still be running or may have finished, so follow it with the `ast services publish-status <job>` the message names. Organizations still on the old flow deploy the old way.
+**Publishing:** in a Git copy, `services publish` refuses uncommitted changes (commit them, or try them with `--test-build`), pushes your branch, publishes its last commit and follows the job; afterwards the branch starts again from the new main. A refusal is `{"error": "PUBLISH_REFUSED", "message": "CODE: what to do"}`; a failed build is `PUBLISH_FAILED` with the build log link. A network error or a gateway's 502/503/504 while following is tried again for about a minute; if the server stays out of reach the error is `PUBLISH_STILL_RUNNING`: the publish may still be running or may have finished, so follow it with the `ast services publish-status <job>` the message names.
 
 **Service types:**
 - **Standard** — run on-demand, complete task, terminate. Good for batch processing and isolated jobs.
@@ -845,30 +845,22 @@ Notes:
   for fresh links. A completed container does not by itself mean the solve
   succeeded — check the log.
 
-## processes — Process discovery index
+## processes — Persistent-service index
 
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
-| `processes get` | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id` (narrows; not read from env), `--name`, `--process`, `--domain`, `--extension` |
+| `processes get` | — | `--organization-id` (default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id` (narrows; not read from env), `--name` |
 
 Notes:
-- One record per persistent service in the organization: `process`, `domain`,
+- One record per persistent service in the organization, read from its record:
   `service_name`, `persistent_service_id`, `service_id`, `service_status`,
-  `tools` (from the service schema), `volume_name` → `volume_id`,
-  `workspace_name` → `workspace_id` (exact-name resolution; `null` plus a
-  `volume_resolution`/`workspace_resolution` with candidates when zero or
-  several match — never guess, never ask the user for a UUID; the volume is
-  looked up in the organization's volumes and in the resolved workspace's,
-  then among every volume the caller can list in the organization),
-  `extension_hints`, `runtime_class` and `preflight` (always per-tool maps:
-  `{"assemble": "minutes", "validate": "minutes"}` — read the entry for the
-  tool you are submitting), `results` (per tool: `glob` / `log_glob` / `report_glob` / `manifest` / `log_family`; a flat block in the file applies to every tool), `default_inputs` (keyed by tool). `preflight` is `dry_run` | `self_validating` | `none` (`no_solve` reads as `dry_run`). Field reference: `docs/process-yaml.md`.
-- The bindings are authored in `process.yaml` next to `service.yaml`, pointed
-  at by a top-level `process:` key (`eclipse_process: 1`, see the README
-  "Processes" section). `services publish` validates it against `service.tools`
-  and folds it into the service schema as `process`. A service without it is
-  listed with `process: null`; an invalid document with `parse_error`; exit
-  code stays 0.
+  `description` (`null` when unset), `instance_type`, `tools` (sorted, from the
+  service schema), `job_markers`, `volume_id` (the default volume; `null` when
+  unset) and `workspace_id`.
+- `job_markers` has one entry per tool: `{"file_inputs": [...], "output_dir":
+  <name or null>}`. A file input is an input with `format: file-path`; the output
+  folder is the input with `format: output-dir`. Marks only: an unmarked output
+  folder is `null`, never guessed from a name.
 - Read-only and URL-free — the same command runs through the gateway's
   `run_ast(["processes", "get", "--organization-id", "<ORG_ID>"])` on Desktop.
 
@@ -935,18 +927,17 @@ Config example: `'{"command":"npx","args":["@playwright/mcp@latest"]}'`
 | Command | Required Options | Optional |
 |---------|-----------------|----------|
 | `skills get` | — | `--mode` (`organization`\|`workspace`\|`user`\|`aggregated`; defaults to `--scope-type`, else `aggregated` in a workspace), `--organization-id`, `--workspace-id`, `--scope-type`, `--name` |
-| `skills create` | `--scope-type`, `--name`; `--file` (.tar.gz) on the old flow | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`; old flow only: `--version`, `--config`, `--enabled`. On the Git flow it clones the new skill into `./<name>` with a `SKILL.md` to commit; if that clone fails, the JSON error's `data` and `hint` give the new id (the same create again reopens and clones it) |
+| `skills create` | `--scope-type`, `--name` | `--organization-id` (organization scope; default: `AST_ORGANIZATION_ID`, then the configured org), `--workspace-id`, `--description`. Clones the new skill into `./<name>` with a `SKILL.md` to commit; if that clone fails, the JSON error's `data` and `hint` give the new id (the same create again reopens and clones it) |
 | `skills clone` | `<name-or-id>` | `--organization-id`, `--workspace-id`, `--dir` |
 | `skills publish` (alias `deploy`) | run in the skill's Git copy | `--path`, `-m/--message`, `--version` (`x.y.z`, or `patch`/`minor`/`major`; default: next patch), `--no-poll` |
 | `skills rollback` | `<version>`; `--skill-id` outside the skill's Git copy | `--workspace-id` (env `AST_WORKSPACE_ID`; a workspace skill), `--noninteractive` (no confirmation), `--no-poll` |
 | `skills publish-status` | `<job-id>` | — |
-| `skills edit` | `--skill-id` | `--name`, `--description` (on the Git flow these publish a patch version), `--version`, `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
+| `skills edit` | `--skill-id` | `--name`, `--description` (these publish a patch version), `--config`, `--enabled`, `--add-tag`, `--remove-tag` (repeatable), `--category <slug>`, `--clear-category`, `--organization-id` (acting org for a user-scoped skill's labels) |
 | `skills delete` | `--skill-id` | — |
-| `skills replace-package` | `--skill-id`, `--file` | — |
 | `skills overrides` | `--workspace-id` | — |
 | `skills toggle-override` | `--workspace-id`, `--skill-id` | — |
 
-On the Git flow, `skills publish`, `skills rollback` and `skills edit` follow their publish job as `services publish` does: a lost connection is tried again, and `PUBLISH_STILL_RUNNING` means follow the job with `ast skills publish-status <job>`.
+`skills publish`, `skills rollback` and `skills edit` follow their publish job as `services publish` does: a lost connection is tried again, and `PUBLISH_STILL_RUNNING` means follow the job with `ast skills publish-status <job>`.
 
 ## tags, categories — Labels
 
@@ -1121,7 +1112,6 @@ Organization → User → Service → Workspace
 | `rules get-workspace` | `--workspace-id` |
 | `rules edit-workspace` | `--workspace-id`, `--rules` \| `--rules-file` |
 | `rules get-service` | `--service-id` |
-| `rules edit-service` | `--service-id`, `--rules` \| `--rules-file` |
 | `rules get-user` | — |
 | `rules edit-user` | `--rules` \| `--rules-file` |
 
